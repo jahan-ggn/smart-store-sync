@@ -11,6 +11,8 @@ import requests
 import shutil
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import re
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +40,8 @@ class CSVService:
                 # Get subscription details
                 cursor.execute(
                     """SELECT buyer_domain, last_push_at 
-                       FROM api_subscriptions 
-                       WHERE id = %s AND status = 'active'""",
+                    FROM api_subscriptions 
+                    WHERE id = %s AND status = 'active'""",
                     (subscription_id,),
                 )
                 subscription = cursor.fetchone()
@@ -57,7 +59,7 @@ class CSVService:
                 # Get selected stores for this subscription
                 cursor.execute(
                     """SELECT store_id FROM subscription_permissions 
-                       WHERE subscription_id = %s""",
+                    WHERE subscription_id = %s""",
                     (subscription_id,),
                 )
                 store_ids = [row["store_id"] for row in cursor.fetchall()]
@@ -69,14 +71,16 @@ class CSVService:
                     return None
 
                 # Build query based on full/incremental load
+                # Added filter: image_url IS NOT NULL AND image_url != ''
                 if is_full_load:
                     query = """
                         SELECT id, store_id, category_id, product_id, product_name, 
-                               product_url, image_url, current_price, original_price, 
-                               stock_status, is_active, last_synced_at, created_at, 
-                               updated_at, has_variants, variants, brand_id
+                            product_url, image_url, current_price, original_price, 
+                            stock_status, is_active, last_synced_at, created_at, 
+                            updated_at, has_variants, variants, brand_id
                         FROM products
                         WHERE store_id IN ({})
+                        AND image_url IS NOT NULL AND image_url != ''
                     """.format(
                         ",".join(["%s"] * len(store_ids))
                     )
@@ -84,12 +88,13 @@ class CSVService:
                 else:
                     query = """
                         SELECT id, store_id, category_id, product_id, product_name, 
-                               product_url, image_url, current_price, original_price, 
-                               stock_status, is_active, last_synced_at, created_at, 
-                               updated_at, has_variants, variants, brand_id
+                            product_url, image_url, current_price, original_price, 
+                            stock_status, is_active, last_synced_at, created_at, 
+                            updated_at, has_variants, variants, brand_id
                         FROM products
                         WHERE store_id IN ({})
                         AND (updated_at > %s OR created_at > %s)
+                        AND image_url IS NOT NULL AND image_url != ''
                     """.format(
                         ",".join(["%s"] * len(store_ids))
                     )
@@ -104,13 +109,14 @@ class CSVService:
                     return None
 
                 # Create CSV directory for this buyer
-                csv_dir = Path(CSVService.BASE_CSV_DIR) / buyer_domain
-                csv_dir.mkdir(parents=True, exist_ok=True)
+                domain_clean = re.sub(r"^https?://", "", buyer_domain)
+                csv_dir = Path(CSVService.BASE_CSV_DIR) / domain_clean
 
                 # Generate CSV filename
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 csv_filename = f"subscription_{subscription_id}_{timestamp}.csv"
                 csv_path = csv_dir / csv_filename
+                csv_dir.mkdir(parents=True, exist_ok=True)
 
                 # Write CSV
                 with open(csv_path, "w", newline="", encoding="utf-8") as csvfile:
@@ -152,7 +158,7 @@ class CSVService:
 
     @staticmethod
     def push_csv_in_chunks(
-        csv_path: str, subscription_id: int, chunk_size: int = 200
+        csv_path: str, subscription_id: int, chunk_size: int = 300
     ) -> Dict:
         """
         Push CSV file in chunks to WordPress API with multi-threading
@@ -160,7 +166,7 @@ class CSVService:
         Args:
             csv_path: Path to CSV file
             subscription_id: Subscription ID
-            chunk_size: Number of rows per chunk (default: 200)
+            chunk_size: Number of rows per chunk (default: 300)
 
         Returns:
             Summary of push results
@@ -217,38 +223,51 @@ class CSVService:
                     "details": [],
                 }
 
-                # Function to send a single chunk
-                def send_chunk(chunk_index, chunk_df):
+                # Function to send a single chunk with retry
+                def send_chunk(chunk_index, chunk_df, max_retries=3):
                     chunk_path = None
-                    try:
-                        # Create temporary chunk file
-                        chunk_path = f"{csv_path}.chunk_{chunk_index}.csv"
-                        chunk_df.to_csv(chunk_path, index=False)
+                    for attempt in range(max_retries):
+                        try:
+                            # Create temporary chunk file
+                            chunk_path = f"{csv_path}.chunk_{chunk_index}.csv"
+                            chunk_df.to_csv(chunk_path, index=False)
 
-                        # Send chunk
-                        with open(chunk_path, "rb") as f:
-                            files = {"file": f}
-                            response = requests.post(api_url, files=files, timeout=300)
+                            # Send chunk
+                            with open(chunk_path, "rb") as f:
+                                files = {"file": f}
+                                response = requests.post(
+                                    api_url, files=files, timeout=300
+                                )
 
-                        response.raise_for_status()
-                        result = response.json()
+                            response.raise_for_status()
+                            result = response.json()
 
-                        return {
-                            "chunk": chunk_index,
-                            "status": "success",
-                            "result": result,
-                        }
+                            return {
+                                "chunk": chunk_index,
+                                "status": "success",
+                                "result": result,
+                                "attempts": attempt + 1,
+                            }
 
-                    except Exception as e:
-                        return {
-                            "chunk": chunk_index,
-                            "status": "failed",
-                            "error": str(e),
-                        }
-                    finally:
-                        # Delete temporary chunk file
-                        if chunk_path and os.path.exists(chunk_path):
-                            os.remove(chunk_path)
+                        except Exception as e:
+                            if attempt < max_retries - 1:
+                                wait_time = 60 * (attempt + 1)  # 60s, 120s
+                                logger.warning(
+                                    f"Chunk {chunk_index} failed (attempt {attempt + 1}), "
+                                    f"retrying in {wait_time}s: {str(e)}"
+                                )
+                                time.sleep(wait_time)
+                            else:
+                                return {
+                                    "chunk": chunk_index,
+                                    "status": "failed",
+                                    "error": str(e),
+                                    "attempts": max_retries,
+                                }
+                        finally:
+                            # Delete temporary chunk file
+                            if chunk_path and os.path.exists(chunk_path):
+                                os.remove(chunk_path)
 
                 # Send chunks in parallel (max 3 workers)
                 with ThreadPoolExecutor(max_workers=3) as executor:
