@@ -267,6 +267,10 @@ class ProductScraper:
             img = element.select_one("img.img-fluid")
             image_url = img.get("src", "").strip() if img else ""
 
+            # Skip products without images
+            if not image_url:
+                return None
+
             # Transform gallery_sm to gallery_md
             if image_url and "gallery_sm" in image_url:
                 image_url = image_url.replace("gallery_sm", "gallery_md")
