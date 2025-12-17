@@ -69,7 +69,7 @@ class ImageService:
                 )
 
             # Construct public URL
-            public_url = f"{settings.R2_ENDPOINT_URL}/{r2_key}"
+            public_url = f"{settings.R2_PUBLIC_URL}/{r2_key}"
             return public_url
 
         except Exception as e:
