@@ -160,19 +160,26 @@ class ProductService:
             stock_status, is_active, brand_id, last_synced_at, created_at, updated_at)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE
-                category_id = VALUES(category_id),
-                product_name = VALUES(product_name),
-                product_url = VALUES(product_url),
-                image_url = VALUES(image_url),
-                current_price = VALUES(current_price),
-                original_price = VALUES(original_price),
-                has_variants = VALUES(has_variants),
-                variants = VALUES(variants),
+            category_id = VALUES(category_id),
+            product_name = VALUES(product_name),
+            product_url = VALUES(product_url),
+            image_url = VALUES(image_url),
+            current_price = VALUES(current_price),
+            original_price = VALUES(original_price),
+            has_variants = VALUES(has_variants),
+            variants = VALUES(variants),
+            stock_status = VALUES(stock_status),
+            is_active = VALUES(is_active),
+            brand_id = VALUES(brand_id),
+            last_synced_at = VALUES(last_synced_at),
+            updated_at = IF(
+                product_name = VALUES(product_name) AND
+                current_price = VALUES(current_price) AND
+                original_price = VALUES(original_price) AND
                 stock_status = VALUES(stock_status),
-                is_active = VALUES(is_active),
-                brand_id = VALUES(brand_id),
-                last_synced_at = VALUES(last_synced_at),
-                updated_at = VALUES(updated_at)
+                updated_at,
+                VALUES(updated_at)
+            )
         """
 
         try:
@@ -241,7 +248,7 @@ class ProductService:
         """
         query = """
             UPDATE products 
-            SET is_active = FALSE 
+            SET is_active = FALSE, updated_at = updated_at
             WHERE store_id = %s AND category_id = %s
         """
 

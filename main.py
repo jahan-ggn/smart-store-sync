@@ -10,6 +10,7 @@ from services.database_service import StoreService, CategoryService, ProductServ
 from config.settings import settings
 from services.push_orchestrator import PushOrchestrator
 from services.csv_service import CSVService
+from services.image_service import ImageService
 
 
 setup_logger()
@@ -300,9 +301,15 @@ def main():
         if not run_product_scraping():
             logger.warning("Product scraping had failures")
 
+        # Step 4: Process images and upload to R2
+        logger.info("=" * 80)
+        logger.info("STEP 4: Image Processing")
+        logger.info("=" * 80)
+        ImageService.process_all_products()
+
         # Step 4: Push data to subscriptions
         logger.info("=" * 80)
-        logger.info("STEP 4: Pushing Data to Subscriptions")
+        logger.info("STEP 5: Pushing Data to Subscriptions")
         logger.info("=" * 80)
 
         push_results = PushOrchestrator.push_to_all_subscriptions()
