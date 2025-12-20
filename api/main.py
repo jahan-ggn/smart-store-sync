@@ -28,5 +28,11 @@ def read_root():
     return {
         "message": "CartPE Product Scraper API",
         "version": "1.0.0",
-        "endpoints": {"stores": "/api/stores"},
+        "endpoints": {
+            "stores": "/api/stores",
+            "register_subscription": "/api/subscriptions/register",
+            "add_permissions": "/api/subscriptions/permissions",
+            "store_woocommerce": "/api/subscriptions/woocommerce",
+            "subscription_status": "/api/subscriptions/status",
+        },
     }
