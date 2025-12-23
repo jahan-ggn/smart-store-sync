@@ -28,7 +28,8 @@ class PermissionAddRequest(BaseModel):
 
 
 class WooCommerceCredentialsRequest(BaseModel):
-    subscription_id: int
+    token: str
+    buyer_domain: str
     consumer_key: str
     consumer_secret: str
 
@@ -152,13 +153,16 @@ async def store_woocommerce_credentials(request: WooCommerceCredentialsRequest):
     """Store WooCommerce API credentials for a subscription"""
     try:
         result = SubscriptionService.store_woocommerce_credentials(
-            subscription_id=request.subscription_id,
+            token=request.token,
+            buyer_domain=request.buyer_domain,
             consumer_key=request.consumer_key,
             consumer_secret=request.consumer_secret,
         )
 
         return {"success": True, "data": result}
 
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
     except Exception as e:
         logger.error(f"Error storing WooCommerce credentials: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

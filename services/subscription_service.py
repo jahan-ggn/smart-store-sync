@@ -188,13 +188,14 @@ class SubscriptionService:
 
     @staticmethod
     def store_woocommerce_credentials(
-        subscription_id: int, consumer_key: str, consumer_secret: str
+        token: str, buyer_domain: str, consumer_key: str, consumer_secret: str
     ) -> Dict:
         """
         Store WooCommerce API credentials for a subscription
 
         Args:
-            subscription_id: Subscription ID
+            token: Subscription token
+            buyer_domain: Buyer's domain
             consumer_key: WooCommerce consumer key
             consumer_secret: WooCommerce consumer secret
 
@@ -210,15 +211,29 @@ class SubscriptionService:
                 raise ValueError(
                     "Invalid consumer_secret format. Must start with 'cs_'"
                 )
-            with DatabaseManager.get_connection() as conn:
-                cursor = conn.cursor()
 
-                # Validate subscription exists
+            with DatabaseManager.get_connection() as conn:
+                cursor = conn.cursor(dictionary=True)
+
+                # Get subscription by domain and verify token
                 cursor.execute(
-                    "SELECT id FROM api_subscriptions WHERE id = %s", (subscription_id,)
+                    """SELECT id, token FROM api_subscriptions 
+                    WHERE buyer_domain = %s AND status = 'active' 
+                    ORDER BY created_at DESC LIMIT 1""",
+                    (buyer_domain,),
                 )
-                if not cursor.fetchone():
-                    raise ValueError(f"Subscription {subscription_id} does not exist")
+                subscription = cursor.fetchone()
+
+                if not subscription:
+                    raise ValueError(
+                        f"No active subscription found for domain: {buyer_domain}"
+                    )
+
+                # Verify token matches
+                if subscription["token"] != token:
+                    raise ValueError("Invalid token for this domain")
+
+                subscription_id = subscription["id"]
 
                 query = """
                     INSERT INTO woocommerce_credentials 
@@ -238,6 +253,7 @@ class SubscriptionService:
 
                 return {
                     "subscription_id": subscription_id,
+                    "buyer_domain": buyer_domain,
                     "message": "WooCommerce credentials stored successfully",
                 }
 
