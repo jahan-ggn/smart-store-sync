@@ -22,7 +22,7 @@ class SubscriptionService:
         Args:
             buyer_email: Buyer's email
             buyer_domain: Buyer's website domain
-            plan_name: Plan type (basic, premium, enterprise)
+            plan_name: Plan type (starter, pro)
             plan_duration: Duration (monthly, yearly)
 
         Returns:
@@ -30,7 +30,7 @@ class SubscriptionService:
         """
         try:
             # Validate inputs
-            if plan_name not in ["basic", "premium", "enterprise"]:
+            if plan_name not in ["starter", "pro"]:
                 raise ValueError(f"Invalid plan_name: {plan_name}")
 
             if plan_duration not in ["monthly", "yearly"]:
@@ -115,7 +115,7 @@ class SubscriptionService:
 
                 # Get subscription by domain and verify token
                 cursor.execute(
-                    """SELECT id, token, plan_name FROM api_subscriptions 
+                    """SELECT id, token FROM api_subscriptions 
                     WHERE buyer_domain = %s AND status = 'active' 
                     ORDER BY created_at DESC LIMIT 1""",
                     (buyer_domain,),
@@ -132,16 +132,6 @@ class SubscriptionService:
                     raise ValueError("Invalid token for this domain")
 
                 subscription_id = subscription["id"]
-                plan_name = subscription["plan_name"]
-
-                # Validate store count based on plan
-                max_stores = {"basic": 3, "premium": 5, "enterprise": float("inf")}
-
-                if len(store_ids) > max_stores.get(plan_name, 0):
-                    raise ValueError(
-                        f"Plan '{plan_name}' allows maximum {max_stores[plan_name]} stores. "
-                        f"You requested {len(store_ids)} stores."
-                    )
 
                 # Validate that all store_ids exist BEFORE deleting
                 cursor.execute(

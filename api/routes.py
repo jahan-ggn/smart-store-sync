@@ -17,7 +17,7 @@ router = APIRouter(prefix="/api", tags=["stores"])
 class SubscriptionCreateRequest(BaseModel):
     buyer_email: EmailStr
     buyer_domain: str
-    plan_name: str  # "basic", "premium", "enterprise"
+    plan_name: str  # "starter", "pro"
     plan_duration: str  # "monthly", "yearly"
 
 
@@ -99,12 +99,15 @@ async def register_subscription(
 
     if api_key != settings.ADMIN_API_KEY:
         raise HTTPException(status_code=403, detail="Invalid API key")
-    try:
-        if request.plan_name not in ["basic", "premium", "enterprise"]:
-            raise HTTPException(status_code=400, detail="Invalid plan_name")
 
+    try:
+        # Validate plan_name
+        if request.plan_name not in ["starter", "pro"]:
+            raise ValueError("Invalid plan_name")
+
+        # Validate plan_duration
         if request.plan_duration not in ["monthly", "yearly"]:
-            raise HTTPException(status_code=400, detail="Invalid plan_duration")
+            raise ValueError("Invalid plan_duration")
 
         subscription = SubscriptionService.create_subscription(
             buyer_email=request.buyer_email,
@@ -115,6 +118,8 @@ async def register_subscription(
 
         return {"success": True, "data": subscription}
 
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Error in register_subscription: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
