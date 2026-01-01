@@ -9,6 +9,7 @@ from bs4 import BeautifulSoup
 from rapidfuzz import fuzz, process
 from config.settings import settings
 from services.database_service import BrandService
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,12 @@ class ProductScraper:
 
     def __init__(self):
         self.session = requests.Session()
+
+        # Increase connection pool for parallel requests
+        adapter = requests.adapters.HTTPAdapter(pool_connections=30, pool_maxsize=30)
+        self.session.mount("http://", adapter)
+        self.session.mount("https://", adapter)
+
         self.session.headers.update({"User-Agent": settings.USER_AGENT})
         # Load brands once during initialization
         self.known_brands = BrandService.get_all_brands()
@@ -175,6 +182,44 @@ class ProductScraper:
         logger.info(
             f"Total products extracted for {category_name}: {len(all_products)}"
         )
+
+        if all_products:
+            logger.info(
+                f"Fetching additional images for {len(all_products)} products..."
+            )
+
+            def fetch_single_product_images(product):
+                product_url = product["product_url"]
+                try:
+                    images = self.extract_product_images(product_url)
+                    return (product_url, images)
+                except requests.HTTPError as e:
+                    if e.response.status_code == 404:
+                        return (product_url, "SKIP")  # Mark for removal
+                    return (product_url, None)
+                except Exception as e:
+                    return (product_url, None)
+
+            with ThreadPoolExecutor(max_workers=20) as executor:
+                futures = {
+                    executor.submit(fetch_single_product_images, p): p
+                    for p in all_products
+                }
+
+                image_results = {}
+                for future in as_completed(futures):
+                    url, images = future.result()
+                    image_results[url] = images
+
+            # Update products with images and remove 404 products
+            all_products = [
+                {**p, "product_images": image_results.get(p["product_url"])}
+                for p in all_products
+                if image_results.get(p["product_url"]) != "SKIP"
+            ]
+
+            logger.info(f"After filtering: {len(all_products)} products remain")
+
         return all_products
 
     def _parse_products_html(
@@ -276,13 +321,15 @@ class ProductScraper:
                 image_url = image_url.replace("gallery_sm", "gallery_md")
 
             # Extract additional product images from product page
-            try:
-                product_images = self.extract_product_images(product_url)
-            except requests.HTTPError as e:
-                if e.response.status_code == 404:
-                    logger.warning(f"Product page not found, skipping: {product_url}")
-                    return None  # Skip this product entirely
-                product_images = None
+            # try:
+            #     product_images = self.extract_product_images(product_url)
+            # except requests.HTTPError as e:
+            #     if e.response.status_code == 404:
+            #         logger.warning(f"Product page not found, skipping: {product_url}")
+            #         return None  # Skip this product entirely
+            #     product_images = None
+
+            product_images = None
 
             # Extract prices
             price_elements = element.select("h6")[1:]

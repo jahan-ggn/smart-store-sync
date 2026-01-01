@@ -10,6 +10,8 @@ from config.settings import settings
 from config.database import DatabaseManager
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
+from botocore.config import Config
+
 
 logger = logging.getLogger(__name__)
 
@@ -19,12 +21,15 @@ class ImageService:
 
     def __init__(self):
         """Initialize R2 client"""
+        # Configure for parallel uploads
+        config = Config(max_pool_connections=30)
         self.s3_client = boto3.client(
             "s3",
             endpoint_url=settings.R2_ENDPOINT_URL,
             aws_access_key_id=settings.R2_ACCESS_KEY_ID,
             aws_secret_access_key=settings.R2_SECRET_ACCESS_KEY,
             region_name="auto",
+            config=config,
         )
         self.bucket_name = settings.R2_BUCKET_NAME
 
@@ -212,7 +217,7 @@ class ImageService:
                         return (product_id, None, None, None)
 
                 # Process in parallel with 10 workers
-                with ThreadPoolExecutor(max_workers=10) as executor:
+                with ThreadPoolExecutor(max_workers=20) as executor:
                     futures = {
                         executor.submit(process_single_product, p): p for p in products
                     }
