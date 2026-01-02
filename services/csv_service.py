@@ -73,27 +73,31 @@ class CSVService:
                 # Build query based on full/incremental load
                 if is_full_load:
                     query = """
-                        SELECT id, store_id, store_name, category_id, product_id, product_name, 
-                            product_url, image_url, image_url_transparent, product_images, current_price, original_price, 
-                            stock_status, is_active, last_synced_at, created_at, 
-                            updated_at, has_variants, variants, brand_id
-                        FROM products
-                        WHERE store_id IN ({})
-                        AND image_url IS NOT NULL AND image_url != ''
+                        SELECT p.id, p.store_id, p.store_name, p.category_id, p.product_id, p.product_name, 
+                            p.product_url, p.image_url, p.image_url_transparent, p.product_images, 
+                            p.current_price, p.original_price, p.stock_status, p.is_active, 
+                            p.last_synced_at, p.created_at, p.updated_at, p.has_variants, p.variants, 
+                            p.brand_id, b.brand_name
+                        FROM products p
+                        LEFT JOIN brands b ON p.brand_id = b.brand_id
+                        WHERE p.store_id IN ({})
+                        AND p.image_url IS NOT NULL AND p.image_url != ''
                     """.format(
                         ",".join(["%s"] * len(store_ids))
                     )
                     cursor.execute(query, store_ids)
                 else:
                     query = """
-                        SELECT id, store_id, store_name, category_id, product_id, product_name, 
-                            product_url, image_url, image_url_transparent, product_images, current_price, original_price, 
-                            stock_status, is_active, last_synced_at, created_at, 
-                            updated_at, has_variants, variants, brand_id
-                        FROM products
-                        WHERE store_id IN ({})
-                        AND (updated_at > %s OR created_at > %s)
-                        AND image_url IS NOT NULL AND image_url != ''
+                        SELECT p.id, p.store_id, p.store_name, p.category_id, p.product_id, p.product_name, 
+                            p.product_url, p.image_url, p.image_url_transparent, p.product_images, 
+                            p.current_price, p.original_price, p.stock_status, p.is_active, 
+                            p.last_synced_at, p.created_at, p.updated_at, p.has_variants, p.variants, 
+                            p.brand_id, b.brand_name
+                        FROM products p
+                        LEFT JOIN brands b ON p.brand_id = b.brand_id
+                        WHERE p.store_id IN ({})
+                        AND (p.updated_at > %s OR p.created_at > %s)
+                        AND p.image_url IS NOT NULL AND p.image_url != ''
                     """.format(
                         ",".join(["%s"] * len(store_ids))
                     )
@@ -140,6 +144,7 @@ class CSVService:
                         "has_variants",
                         "variants",
                         "brand_id",
+                        "brand_name",
                     ]
                     writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                     writer.writeheader()
