@@ -4,6 +4,7 @@ import logging
 from datetime import datetime
 from typing import List, Dict, Optional
 from config.database import DatabaseManager
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -177,19 +178,25 @@ class ProductService:
         if not products:
             return 0
 
-        query = """
+        # Extract R2 domain for comparison
+        r2_domain = settings.R2_PUBLIC_URL.replace("https://", "").replace(
+            "http://", ""
+        )
+
+        query = f"""
             INSERT INTO products 
             (store_id, store_name, category_id, product_id, product_name, product_url, 
-            image_url, image_url_transparent, product_images, current_price, original_price, has_variants, variants,
+            image_url, source_image_url, image_url_transparent, product_images, current_price, original_price, has_variants, variants,
             stock_status, is_active, brand_id, last_synced_at, created_at, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE
             category_id = VALUES(category_id),
             product_name = VALUES(product_name),
             product_url = VALUES(product_url),
-            image_url = VALUES(image_url),
-            image_url_transparent = VALUES(image_url_transparent),
-            product_images = VALUES(product_images),
+            image_url = IF(image_url LIKE '%{r2_domain}%', image_url, VALUES(image_url)),
+            source_image_url = VALUES(source_image_url),
+            image_url_transparent = IF(image_url_transparent LIKE '%{r2_domain}%', image_url_transparent, VALUES(image_url_transparent)),
+            product_images = IF(product_images LIKE '%{r2_domain}%', product_images, VALUES(product_images)),
             current_price = VALUES(current_price),
             original_price = VALUES(original_price),
             has_variants = VALUES(has_variants),
@@ -203,8 +210,7 @@ class ProductService:
                 current_price = VALUES(current_price) AND
                 original_price = VALUES(original_price) AND
                 stock_status = VALUES(stock_status) AND
-                image_url = VALUES(image_url) AND
-                (product_images = VALUES(product_images) OR (product_images IS NULL AND VALUES(product_images) IS NULL)),
+                source_image_url = VALUES(source_image_url),
                 updated_at,
                 VALUES(updated_at)
             )
@@ -221,6 +227,7 @@ class ProductService:
                     prod["product_name"],
                     prod["product_url"],
                     prod["image_url"],
+                    prod["source_image_url"],
                     prod["image_url_transparent"],
                     prod["product_images"],
                     prod["current_price"],
@@ -228,8 +235,8 @@ class ProductService:
                     prod["has_variants"],
                     prod["variants"],
                     prod["stock_status"],
-                    True,  # is_active - products found in scrape are active
-                    prod["brand_id"],  # brand_id
+                    True,  # is_active
+                    prod["brand_id"],
                     now,  # last_synced_at
                     now,  # created_at
                     now,  # updated_at

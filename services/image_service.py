@@ -102,10 +102,15 @@ class ImageService:
 
                 # Get products with non-R2 image URLs
                 cursor.execute(
-                    """SELECT id, store_id, image_url, product_images FROM products 
-                    WHERE image_url IS NOT NULL 
-                    AND image_url != '' 
-                    AND image_url NOT LIKE %s""",
+                    """SELECT id, store_id, image_url, source_image_url, product_images 
+                        FROM products 
+                        WHERE image_url IS NOT NULL 
+                        AND image_url != '' 
+                        AND source_image_url IS NOT NULL
+                        AND (
+                            SUBSTRING_INDEX(source_image_url, '/', -1) != SUBSTRING_INDEX(image_url, '/', -1)
+                            OR image_url NOT LIKE %s
+                        )""",
                     (f"{settings.R2_PUBLIC_URL}%",),
                 )
                 products = cursor.fetchall()
@@ -119,10 +124,10 @@ class ImageService:
                     """Process a single product's image"""
                     product_id = product["id"]
                     store_id = product["store_id"]
-                    original_url = product["image_url"]
+                    source_url = product["source_image_url"]
                     product_images_str = product.get("product_images")
 
-                    filename = original_url.split("/")[-1]
+                    filename = source_url.split("/")[-1]
                     needs_transparent = False
 
                     try:
@@ -131,12 +136,10 @@ class ImageService:
                         temp_dir.mkdir(exist_ok=True)
                         temp_path = temp_dir / filename
 
-                        if not image_service.download_image(
-                            original_url, str(temp_path)
-                        ):
-                            return (product_id, None, None)
+                        if not image_service.download_image(source_url, str(temp_path)):
+                            return (product_id, None, None, None)
 
-                        # Always upload to starter folder
+                        # Upload to R2
                         starter_key = f"starter/{filename}"
                         starter_url = image_service.upload_to_r2(
                             str(temp_path), starter_key
@@ -145,7 +148,7 @@ class ImageService:
                         if not starter_url:
                             if temp_path.exists():
                                 os.remove(temp_path)
-                            return (product_id, None, None)
+                            return (product_id, None, None, None)
 
                         transparent_url = None
 

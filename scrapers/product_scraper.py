@@ -91,6 +91,12 @@ class ProductScraper:
 
         return None
 
+    def _extract_filename(self, url: str) -> Optional[str]:
+        """Extract filename from URL"""
+        if not url:
+            return None
+        return url.split("/")[-1]
+
     def extract_products(
         self, store_data: Dict, category_data: Dict, orderby: str = "new"
     ) -> List[Dict]:
@@ -192,10 +198,13 @@ class ProductScraper:
                     store_id, product["product_id"]
                 )
 
+                existing_filename = self._extract_filename(existing_image)
+                new_filename = self._extract_filename(product["image_url"])
+
                 # Fetch additional images if:
                 # 1. Product doesn't exist (new product) - existing_image is None
-                # 2. Main image has changed - existing_image != current image
-                if existing_image is None or existing_image != product["image_url"]:
+                # 2. Main image filename has changed - filenames differ
+                if existing_image is None or existing_filename != new_filename:
                     products_needing_images.append(product)
 
             logger.info(
@@ -237,7 +246,7 @@ class ProductScraper:
 
             logger.info(f"After filtering: {len(all_products)} products remain")
 
-            return all_products
+        return all_products
 
     def _parse_products_html(
         self, html: str, store_id: int, store_name: str, category_id: int
@@ -398,6 +407,7 @@ class ProductScraper:
                 "product_name": product_name,
                 "product_url": product_url,
                 "image_url": image_url,
+                "source_image_url": image_url,
                 "image_url_transparent": None,
                 "product_images": product_images,
                 "current_price": current_price,
