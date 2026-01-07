@@ -127,7 +127,7 @@ class ImageService:
                     source_url = product["source_image_url"]
                     product_images_str = product.get("product_images")
 
-                    filename = source_url.split("/")[-1]
+                    filename = f"{product_id}_{source_url.split('/')[-1]}"
                     needs_transparent = False
 
                     try:
@@ -151,7 +151,8 @@ class ImageService:
                             return (product_id, None, None, None)
 
                         # Upload to R2
-                        starter_key = f"starter/{filename}"
+                        original_filename = source_url.split("/")[-1]
+                        starter_key = f"starter/{original_filename}"
                         starter_url = image_service.upload_to_r2(
                             str(temp_path), starter_key
                         )
@@ -198,7 +199,7 @@ class ImageService:
                             processed_urls = []
 
                             for img_url in image_urls:
-                                img_filename = img_url.split("/")[-1]
+                                img_filename = f"{product_id}_{img_url.split('/')[-1]}"
                                 img_temp_path = temp_dir / img_filename
 
                                 try:
@@ -210,7 +211,7 @@ class ImageService:
                                         )
                                         continue
 
-                                    img_key = f"starter/{img_filename}"
+                                    img_key = f"starter/{img_url.split('/')[-1]}"
                                     img_r2_url = image_service.upload_to_r2(
                                         str(img_temp_path), img_key
                                     )
