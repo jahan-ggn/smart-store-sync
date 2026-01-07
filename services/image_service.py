@@ -249,7 +249,7 @@ class ImageService:
                             success += 1
 
                             if success % 100 == 0:
-                                logger.info(f"Processed {success} images...")
+                                logger.info(f"Processed {success} product images...")
                         else:
                             failed += 1
 
