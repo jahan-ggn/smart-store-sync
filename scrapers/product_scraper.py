@@ -22,19 +22,23 @@ class ProductScraper:
     def __init__(self):
         self.session = requests.Session()
 
+        # Retry strategy - exclude 500 errors as they're handled in code
         retry_strategy = Retry(
             total=3,
             backoff_factor=3,
-            status_forcelist=[429, 500, 502, 503, 504],
+            status_forcelist=[429, 502, 503, 504],  # Removed 500
             allowed_methods=["GET", "POST"],
         )
+
         adapter = requests.adapters.HTTPAdapter(
             pool_connections=30, pool_maxsize=30, max_retries=retry_strategy
         )
+
         self.session.mount("http://", adapter)
         self.session.mount("https://", adapter)
 
         self.session.headers.update({"User-Agent": settings.USER_AGENT})
+
         # Load brands once during initialization
         self.known_brands = BrandService.get_all_brands()
         logger.info(f"Loaded {len(self.known_brands)} brands for matching")
@@ -137,10 +141,8 @@ class ProductScraper:
 
         while True:
             try:
-                # Construct API URL
+                # Try primary endpoint first
                 api_url = f"{base_url}{api_endpoint}"
-
-                # Prepare POST data
                 payload = {
                     "getresult": offset,
                     "web_token": web_token,
@@ -152,7 +154,6 @@ class ProductScraper:
                     f"Fetching page {page} (offset: {offset}) for {category_name}"
                 )
 
-                # Make API request
                 response = self.session.post(
                     api_url, data=payload, timeout=settings.REQUEST_TIMEOUT
                 )
@@ -164,55 +165,41 @@ class ProductScraper:
                         f"Token expired for store: {store_name}"
                     )
 
-                # If empty 500, try alternative endpoint
+                # If primary endpoint returns empty 500, try alternative endpoint
                 if response.status_code == 500 and len(response.text.strip()) == 0:
-                    try:
-                        # Try alternative endpoint with self_category_slug
-                        api_url_new = f"{base_url}/store_product_loadmore_new"
-                        payload_new = {
-                            "getresult": offset,
-                            "self_category_slug": category_slug,
-                            "orderby": orderby,
-                            "web_token": web_token,
-                        }
-                        response = self.session.post(
-                            api_url_new,
-                            data=payload_new,
-                            timeout=settings.REQUEST_TIMEOUT,
+                    logger.debug(
+                        f"Primary endpoint returned empty 500, trying alternative endpoint for {category_name}"
+                    )
+
+                    api_url_new = f"{base_url}/store_product_loadmore_new"
+                    payload_new = {
+                        "getresult": offset,
+                        "self_category_slug": category_slug,
+                        "orderby": orderby,
+                        "web_token": web_token,
+                    }
+
+                    response = self.session.post(
+                        api_url_new,
+                        data=payload_new,
+                        timeout=settings.REQUEST_TIMEOUT,
+                    )
+
+                    # Check token expiration on alternative endpoint
+                    if response.status_code == 403:
+                        logger.warning(
+                            f"Token expired for {store_name}. Needs re-fetch."
+                        )
+                        raise TokenExpiredException(
+                            f"Token expired for store: {store_name}"
                         )
 
-                        # Check for token expiration on retry
-                        if response.status_code == 403:
-                            logger.warning(
-                                f"Token expired for {store_name}. Needs re-fetch."
-                            )
-                            raise TokenExpiredException(
-                                f"Token expired for store: {store_name}"
-                            )
-
-                        # If still empty after retry, it's truly empty
-                        if (
-                            response.status_code == 500
-                            and len(response.text.strip()) == 0
-                        ):
-                            logger.info(
-                                f"Empty category: {category_name} (store: {store_name})"
-                            )
-                            break
-
-                    except TokenExpiredException:
-                        raise  # Re-raise token expiration
-                    except requests.RequestException as e:
-                        logger.error(
-                            f"Retry failed for {store_name} - {category_name}: {str(e)}"
-                        )
-                        break
-                    except Exception as e:
-                        logger.error(
-                            f"Unexpected error in retry for {store_name} - {category_name}: {str(e)}"
-                        )
+                    # If both endpoints return empty 500, it's an empty category
+                    if response.status_code == 500 and len(response.text.strip()) == 0:
+                        logger.info(f"Empty category: {store_name} - {category_name}")
                         break
 
+                # Raise for other HTTP errors
                 response.raise_for_status()
 
                 # Parse HTML response
@@ -238,17 +225,21 @@ class ProductScraper:
                 raise  # Re-raise to handle at higher level
             except requests.RequestException as e:
                 logger.error(
-                    f"Error fetching products for category {store_name} - {category_name} (page {page}): {str(e)}"
+                    f"Error fetching products for category {store_name} - {category_name} "
+                    f"(page {page}, status: {getattr(e.response, 'status_code', 'N/A')}): {str(e)}"
                 )
                 break
             except Exception as e:
-                logger.error(f"Unexpected error (page {page}): {str(e)}")
+                logger.error(
+                    f"Unexpected error for {store_name} - {category_name} (page {page}): {str(e)}"
+                )
                 break
 
         logger.info(
             f"Total products extracted for {category_name}: {len(all_products)}"
         )
 
+        # Fetch additional images for products
         if all_products:
             products_needing_images = []
 
@@ -260,9 +251,7 @@ class ProductScraper:
                 existing_filename = self._extract_filename(existing_image)
                 new_filename = self._extract_filename(product["image_url"])
 
-                # Fetch additional images if:
-                # 1. Product doesn't exist (new product) - existing_image is None
-                # 2. Main image filename has changed - filenames differ
+                # Fetch additional images if product is new or image changed
                 if existing_image is None or existing_filename != new_filename:
                     products_needing_images.append(product)
 
@@ -280,10 +269,10 @@ class ProductScraper:
                     if e.response.status_code == 404:
                         return (product_url, "SKIP")  # Mark for removal
                     return (product_url, None)
-                except Exception as e:
+                except Exception:
                     return (product_url, None)
 
-            # Only fetch for filtered products
+            # Fetch images in parallel
             image_results = {}
             if products_needing_images:
                 with ThreadPoolExecutor(max_workers=10) as executor:
