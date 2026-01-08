@@ -24,7 +24,7 @@ class ProductScraper:
 
         retry_strategy = Retry(
             total=3,
-            backoff_factor=2,
+            backoff_factor=3,
             status_forcelist=[429, 500, 502, 503, 504],
             allowed_methods=["GET", "POST"],
         )
@@ -271,7 +271,6 @@ class ProductScraper:
 
             def fetch_single_product_images(product):
                 product_url = product["product_url"]
-                time.sleep(0.5)
                 try:
                     images = self.extract_product_images(product_url)
                     return (product_url, images)
