@@ -37,7 +37,7 @@ class ProductScraper:
         """Make GET request through VPN interface"""
         try:
             result = subprocess.run(
-                ["curl", "--interface", "tun0", "-s", "-f", url],
+                ["/usr/bin/curl", "--interface", "tun0", "-s", "-f", url],
                 capture_output=True,
                 text=True,
                 timeout=timeout,
