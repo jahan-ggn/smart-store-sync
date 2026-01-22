@@ -1,6 +1,5 @@
 """Database connection management with connection pooling"""
 
-import mysql.connector
 from mysql.connector import pooling, Error
 from contextlib import contextmanager
 from config.settings import settings
@@ -32,7 +31,7 @@ class DatabaseManager:
                     autocommit=False,
                 )
                 logger.info(
-                    f"Database connection pool initialized with {settings.POOL_SIZE} connections"
+                    f"Database pool initialized with {settings.POOL_SIZE} connections"
                 )
             except Error as e:
                 logger.error(f"Error creating connection pool: {e}")
@@ -41,10 +40,7 @@ class DatabaseManager:
     @classmethod
     @contextmanager
     def get_connection(cls):
-        """
-        Context manager for database connections
-        Automatically handles commit/rollback and connection release
-        """
+        """Context manager for database connections"""
         if cls._pool is None:
             cls.initialize_pool()
 
@@ -64,43 +60,18 @@ class DatabaseManager:
 
     @classmethod
     def execute_query(cls, query, params=None, fetch=False):
-        """
-        Execute a single query with optional parameters
-
-        Args:
-            query: SQL query string
-            params: Query parameters (tuple or dict)
-            fetch: If True, return fetched results
-
-        Returns:
-            For SELECT: List of rows
-            For INSERT/UPDATE: Number of affected rows
-        """
+        """Execute a single query with optional parameters"""
         with cls.get_connection() as conn:
             cursor = conn.cursor(dictionary=True)
             try:
                 cursor.execute(query, params or ())
-
-                if fetch:
-                    result = cursor.fetchall()
-                    return result
-                else:
-                    return cursor.rowcount
+                return cursor.fetchall() if fetch else cursor.rowcount
             finally:
                 cursor.close()
 
     @classmethod
     def execute_many(cls, query, data):
-        """
-        Execute batch insert/update operations
-
-        Args:
-            query: SQL query string
-            data: List of tuples containing parameter values
-
-        Returns:
-            Number of affected rows
-        """
+        """Execute batch insert/update operations"""
         with cls.get_connection() as conn:
             cursor = conn.cursor()
             try:
@@ -108,7 +79,3 @@ class DatabaseManager:
                 return cursor.rowcount
             finally:
                 cursor.close()
-
-
-# Initialize pool on import
-DatabaseManager.initialize_pool()

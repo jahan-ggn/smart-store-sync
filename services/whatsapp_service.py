@@ -16,44 +16,26 @@ class WhatsAppService:
         self.from_number = settings.TWILIO_WHATSAPP_FROM
 
     def send_message(self, to_number: str, message: str) -> bool:
-        """
-        Send WhatsApp message
-
-        Args:
-            to_number: Recipient WhatsApp number (format: whatsapp:+91xxxxxxxxxx)
-            message: Message content
-
-        Returns:
-            True if sent successfully, False otherwise
-        """
+        """Send WhatsApp message"""
         try:
             message = self.client.messages.create(
                 from_=self.from_number, body=message, to=to_number
             )
-
             logger.info(f"WhatsApp message sent to {to_number}: {message.sid}")
             return True
-
         except Exception as e:
             logger.error(f"Error sending WhatsApp to {to_number}: {str(e)}")
             return False
 
     @staticmethod
     def send_error_notification(error_message: str, stack_trace: str = None):
-        """
-        Send error notification to admin
-
-        Args:
-            error_message: Error message
-            stack_trace: Full stack trace (optional)
-        """
+        """Send error notification to admin"""
         service = WhatsAppService()
 
         message = f"🚨 *Smart Store Sync Error Alert*\n\n"
         message += f"*Error:* {error_message}\n\n"
 
         if stack_trace:
-            # Limit stack trace to 1000 chars (WhatsApp limit)
             trace_preview = stack_trace[:1000]
             message += f"*Stack Trace:*\n```{trace_preview}```"
 
@@ -63,15 +45,7 @@ class WhatsAppService:
     def send_payment_reminder(
         buyer_name: str, expiry_date: str, days_left: int, to_number: str
     ):
-        """
-        Send payment reminder to subscriber
-
-        Args:
-            buyer_name: Subscriber name
-            expiry_date: Subscription expiry date
-            days_left: Days until expiry
-            to_number: Subscriber WhatsApp number
-        """
+        """Send payment reminder to subscriber"""
         service = WhatsAppService()
 
         message = f"Hi {buyer_name},\n\n"

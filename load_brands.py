@@ -4,7 +4,7 @@ import logging
 from utils.logger import setup_logger
 from config.database import DatabaseManager
 
-setup_logger()
+setup_logger("brands")
 logger = logging.getLogger(__name__)
 
 
@@ -26,17 +26,15 @@ def load_brands_from_file(file_path: str = "brands.txt"):
 
         logger.info(f"Found {len(brands)} brands in file")
 
-        # Prepare insert query
-        query = "INSERT IGNORE INTO brands (brand_name) VALUES (%s)"
-
-        # Prepare data
-        data = [(brand,) for brand in brands if brand]
-
         # Truncate table first
         with DatabaseManager.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM brands")
             conn.commit()
+
+        # Prepare insert query
+        query = "INSERT IGNORE INTO brands (brand_name) VALUES (%s)"
+        data = [(brand,) for brand in brands if brand]
 
         # Bulk insert
         rows_affected = DatabaseManager.execute_many(query, data)

@@ -14,11 +14,11 @@ class Settings:
     DB_PORT = int(os.getenv("DB_PORT", 3306))
     DB_USER = os.getenv("DB_USER", "root")
     DB_PASSWORD = os.getenv("DB_PASSWORD", "")
-    DB_NAME = os.getenv("DB_NAME", "cartpe_scraper")
+    DB_NAME = os.getenv("DB_NAME", "smart_store_sync")
     ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "")
 
     # Connection Pool Settings
-    POOL_NAME = "cartpe_pool"
+    POOL_NAME = "smart_store_sync_pool"
     POOL_SIZE = int(os.getenv("POOL_SIZE", 10))
 
     # Scraping Configuration
@@ -39,7 +39,7 @@ class Settings:
     R2_BUCKET_NAME = os.getenv("R2_BUCKET_NAME", "")
     R2_PUBLIC_URL = os.getenv("R2_PUBLIC_URL", "")
 
-    # DEZGO
+    # DEZGO (background removal)
     DEZGO_API_KEY = os.getenv("DEZGO_API_KEY", "")
 
     # Twilio Configuration

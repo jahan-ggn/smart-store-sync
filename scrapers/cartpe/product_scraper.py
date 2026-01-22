@@ -1,4 +1,4 @@
-"""Product scraper for extracting products from store API"""
+"""Product scraper for CartPE stores"""
 
 import re
 import requests
@@ -7,61 +7,52 @@ import time
 from typing import List, Dict, Optional
 from bs4 import BeautifulSoup
 from rapidfuzz import fuzz, process
-from config.settings import settings
-from services.database_service import BrandService
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from services.database_service import ProductService
 from urllib3.util.retry import Retry
+from requests.adapters import HTTPAdapter
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from config.settings import settings
+import json
 
 logger = logging.getLogger(__name__)
 
 
-class ProductScraper:
-    """Scrapes products from store API endpoints"""
+class TokenExpiredException(Exception):
+    """Custom exception for expired web tokens"""
 
-    def __init__(self):
+    pass
+
+
+class ProductScraper:
+    """Scrapes products from CartPE store API endpoints"""
+
+    def __init__(self, known_brands: List[str] = None, product_service=None):
         self.session = requests.Session()
 
-        # Retry strategy - exclude 500 errors as they're handled in code
         retry_strategy = Retry(
             total=3,
             backoff_factor=3,
-            status_forcelist=[429, 502, 503, 504],  # Removed 500
+            status_forcelist=[429, 502, 503, 504],
             allowed_methods=["GET", "POST"],
         )
-
-        adapter = requests.adapters.HTTPAdapter(
+        adapter = HTTPAdapter(
             pool_connections=30, pool_maxsize=30, max_retries=retry_strategy
         )
-
         self.session.mount("http://", adapter)
         self.session.mount("https://", adapter)
-
         self.session.headers.update({"User-Agent": settings.USER_AGENT})
 
-        # Load brands once during initialization
-        self.known_brands = BrandService.get_all_brands()
+        self.known_brands = known_brands or []
+        self.product_service = product_service
         logger.info(f"Loaded {len(self.known_brands)} brands for matching")
 
     def _extract_brand_from_name(self, product_name: str) -> Optional[str]:
-        """
-        Extract and normalize brand name from product name using multi-strategy approach
-
-        Args:
-            product_name: Full product name
-
-        Returns:
-            Matched brand name or None
-        """
+        """Extract and normalize brand name from product name using multi-strategy approach"""
         if not product_name or not self.known_brands:
             return None
 
         # Step 1: Clean the product name
-        # Remove underscores completely (they're noise)
         cleaned = product_name.replace("_", "")
-        # Remove special characters except spaces
         cleaned = re.sub(r"[^\w\s]", " ", cleaned)
-        # Normalize whitespace
         cleaned = re.sub(r"\s+", " ", cleaned).strip()
         cleaned_lower = cleaned.lower()
 
@@ -74,7 +65,6 @@ class ProductScraper:
 
         # Strategy 1: Exact word boundary match
         for brand_clean, brand_original in brand_map.items():
-            # Check if brand appears as complete word(s) at start or anywhere
             pattern = r"\b" + re.escape(brand_clean) + r"\b"
             if re.search(pattern, cleaned_lower):
                 return brand_original
@@ -85,14 +75,12 @@ class ProductScraper:
             for num_words in [3, 2, 1]:
                 if len(words) >= num_words:
                     candidate = " ".join(words[:num_words])
-
                     best_match = process.extractOne(
                         candidate,
                         list(brand_map.keys()),
                         scorer=fuzz.ratio,
-                        score_cutoff=88,  # High threshold for accuracy
+                        score_cutoff=88,
                     )
-
                     if best_match:
                         return brand_map[best_match[0]]
 
@@ -112,17 +100,7 @@ class ProductScraper:
     def extract_products(
         self, store_data: Dict, category_data: Dict, orderby: str = "new"
     ) -> List[Dict]:
-        """
-        Extract all products for a category using pagination
-
-        Args:
-            store_data: Dictionary containing store information
-            category_data: Dictionary containing category information
-            orderby: Sorting order (default: 'new')
-
-        Returns:
-            List of product dictionaries
-        """
+        """Extract all products for a category using pagination"""
         store_id = store_data["store_id"]
         store_name = store_data["store_name"]
         base_url = store_data["base_url"].rstrip("/")
@@ -222,7 +200,7 @@ class ProductScraper:
                 time.sleep(settings.REQUEST_DELAY)
 
             except TokenExpiredException:
-                raise  # Re-raise to handle at higher level
+                raise
             except requests.RequestException as e:
                 logger.error(
                     f"Error fetching products for category {store_name} - {category_name} "
@@ -240,12 +218,12 @@ class ProductScraper:
         )
 
         # Fetch additional images for products
-        if all_products:
+        if all_products and self.product_service:
             products_needing_images = []
 
             for product in all_products:
-                existing_image = ProductService.get_existing_product_image(
-                    store_id, product["product_id"]
+                existing_image = self.product_service.get_existing_product_image(
+                    store_id, product["external_product_id"]
                 )
 
                 existing_filename = self._extract_filename(existing_image)
@@ -267,7 +245,7 @@ class ProductScraper:
                     return (product_url, images)
                 except requests.HTTPError as e:
                     if e.response.status_code == 404:
-                        return (product_url, "SKIP")  # Mark for removal
+                        return (product_url, "SKIP")
                     return (product_url, None)
                 except Exception:
                     return (product_url, None)
@@ -299,23 +277,11 @@ class ProductScraper:
     def _parse_products_html(
         self, html: str, store_id: int, store_name: str, category_id: int
     ) -> List[Dict]:
-        """
-        Parse HTML response to extract product details
-
-        Args:
-            html: HTML response string
-            store_id: Store ID
-            category_id: Category ID
-
-        Returns:
-            List of product dictionaries
-        """
+        """Parse HTML response to extract product details"""
         products = []
 
         try:
             soup = BeautifulSoup(html, "lxml")
-
-            # Find all product containers
             product_elements = soup.select("div.col-lg-4.col-md-6.col-6")
 
             for element in product_elements:
@@ -337,17 +303,7 @@ class ProductScraper:
     def _extract_product_details(
         self, element, store_id: int, store_name: str, category_id: int
     ) -> Optional[Dict]:
-        """
-        Extract details from a single product element
-
-        Args:
-            element: BeautifulSoup element
-            store_id: Store ID
-            category_id: Category ID
-
-        Returns:
-            Product dictionary or None
-        """
+        """Extract details from a single product element"""
         try:
             # Extract product URL and name
             link = element.select_one('a[href*=".html"]')
@@ -369,16 +325,13 @@ class ProductScraper:
 
             # Extract brand from product name
             brand_name = self._extract_brand_from_name(product_name)
-            brand_id = None
-            if brand_name:
-                brand_id = BrandService.get_brand_id_by_name(brand_name)
 
             # Extract product ID from button
             button = element.select_one("button[data-product_id]")
             if not button:
                 return None
 
-            product_id = button.get("data-product_id", "").strip()
+            external_product_id = button.get("data-product_id", "").strip()
 
             # Determine stock status from button text
             button_text = button.get_text(strip=True)
@@ -397,15 +350,6 @@ class ProductScraper:
             # Transform gallery_sm to gallery_md
             if image_url and "gallery_sm" in image_url:
                 image_url = image_url.replace("gallery_sm", "gallery_md")
-
-            # Extract additional product images from product page
-            # try:
-            #     product_images = self.extract_product_images(product_url)
-            # except requests.HTTPError as e:
-            #     if e.response.status_code == 404:
-            #         logger.warning(f"Product page not found, skipping: {product_url}")
-            #         return None  # Skip this product entirely
-            #     product_images = None
 
             product_images = None
 
@@ -449,13 +393,15 @@ class ProductScraper:
                 ]
                 if variant_list:
                     has_variants = True
-                    variants = ", ".join(variant_list)
+                    variants = json.dumps(
+                        [{"name": "Size", "value": v} for v in variant_list]
+                    )
 
             return {
                 "store_id": store_id,
                 "store_name": store_name,
                 "category_id": category_id,
-                "product_id": product_id,
+                "external_product_id": external_product_id,
                 "product_name": product_name,
                 "product_url": product_url,
                 "image_url": image_url,
@@ -467,7 +413,7 @@ class ProductScraper:
                 "has_variants": has_variants,
                 "variants": variants,
                 "stock_status": stock_status,
-                "brand_id": brand_id,
+                "brand_name": brand_name,
             }
 
         except Exception as e:
@@ -475,15 +421,7 @@ class ProductScraper:
             return None
 
     def extract_product_images(self, product_url: str) -> Optional[str]:
-        """
-        Extract all additional product images from product detail page
-
-        Args:
-            product_url: URL of the product detail page
-
-        Returns:
-            Comma-separated image URLs (excluding the first/primary image), or None
-        """
+        """Extract all additional product images from product detail page"""
         try:
             response = self.session.get(product_url, timeout=settings.REQUEST_TIMEOUT)
             response.raise_for_status()
@@ -494,7 +432,7 @@ class ProductScraper:
             image_elements = soup.select("li.main-image img.img-fluid")
 
             if len(image_elements) <= 1:
-                return None  # Only primary image or no images
+                return None
 
             # Extract URLs, skip first one (primary image)
             image_urls = [img.get("src", "").strip() for img in image_elements[1:]]
@@ -506,7 +444,7 @@ class ProductScraper:
 
         except requests.HTTPError as e:
             if e.response.status_code == 404:
-                raise  # Re-raise 404 to skip product
+                raise
             logger.warning(f"Error extracting images from {product_url}: {e}")
             return None
 
@@ -517,9 +455,3 @@ class ProductScraper:
     def close(self):
         """Close the requests session"""
         self.session.close()
-
-
-class TokenExpiredException(Exception):
-    """Custom exception for expired web tokens"""
-
-    pass

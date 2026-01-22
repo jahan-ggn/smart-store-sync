@@ -32,7 +32,7 @@ class ReminderScheduler:
                     query = """
                         SELECT buyer_email, expires_at, whatsapp_number
                         FROM api_subscriptions
-                        WHERE status = 'active'
+                        WHERE expires_at > NOW()
                         AND DATE(expires_at) = DATE(%s)
                         AND whatsapp_number IS NOT NULL
                     """
@@ -58,7 +58,8 @@ class ReminderScheduler:
         except Exception as e:
             logger.error(f"Error in reminder scheduler: {str(e)}")
             WhatsAppService.send_error_notification(
-                error_message=f"Reminder scheduler failed: {str(e)}", stack_trace=str(e)
+                error_message=f"Reminder scheduler failed: {str(e)}",
+                stack_trace=str(e),
             )
 
     def start(self):

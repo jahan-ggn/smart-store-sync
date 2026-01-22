@@ -2,31 +2,31 @@
 
 import logging
 import os
-from datetime import datetime
 from config.settings import settings
 
 
-def setup_logger():
-    """Configure and return application logger"""
+def setup_logger(source: str = "scraper"):
+    """
+    Configure and return application logger
 
-    # Create logs directory if it doesn't exist
+    Args:
+        source: 'cartpe', 'woocommerce', or 'scraper' (default)
+    """
     if not os.path.exists(settings.LOG_DIR):
         os.makedirs(settings.LOG_DIR)
 
-    # Create logger
     logger = logging.getLogger()
     logger.setLevel(getattr(logging, settings.LOG_LEVEL))
 
-    # Avoid duplicate handlers
-    if logger.handlers:
-        return logger
+    # Clear existing handlers
+    logger.handlers.clear()
 
-    # File handler - logs to file
-    log_file = os.path.join(settings.LOG_DIR, settings.LOG_FILE)
+    # File handler - source specific
+    log_file = os.path.join(settings.LOG_DIR, f"{source}.log")
     file_handler = logging.FileHandler(log_file, encoding="utf-8")
     file_handler.setLevel(logging.DEBUG)
 
-    # Console handler - logs to console
+    # Console handler
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.INFO)
 
@@ -35,7 +35,6 @@ def setup_logger():
         "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
-
     file_handler.setFormatter(formatter)
     console_handler.setFormatter(formatter)
 
@@ -43,7 +42,3 @@ def setup_logger():
     logger.addHandler(console_handler)
 
     return logger
-
-
-# Initialize logger
-setup_logger()

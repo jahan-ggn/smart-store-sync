@@ -32,6 +32,8 @@ Thumbs.db
 csv_exports/
 
 temp_images/
+temp_videos/
 
 truncate_tables.py
 
+temp.py

@@ -1,8 +1,8 @@
 """Orchestrator for pushing data to all active subscriptions"""
 
 import logging
-from typing import Dict, List
 from datetime import datetime
+from typing import Dict
 from config.database import DatabaseManager
 from services.csv_service import CSVService
 
@@ -14,22 +14,15 @@ class PushOrchestrator:
 
     @staticmethod
     def push_to_all_subscriptions() -> Dict:
-        """
-        Push data to all active subscriptions
-
-        Returns:
-            Summary of push results
-        """
+        """Push data to all active subscriptions"""
         try:
             with DatabaseManager.get_connection() as conn:
                 cursor = conn.cursor(dictionary=True)
 
                 # Get all active subscriptions
-                cursor.execute(
-                    """SELECT id, buyer_domain 
+                cursor.execute("""SELECT id, buyer_domain 
                        FROM api_subscriptions 
-                       WHERE status = 'active' AND expires_at > NOW()"""
-                )
+                       WHERE expires_at > NOW()""")
                 subscriptions = cursor.fetchall()
 
                 logger.info(f"Found {len(subscriptions)} active subscriptions")

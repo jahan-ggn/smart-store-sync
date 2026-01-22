@@ -1,38 +1,33 @@
-"""FastAPI application for CartPE scraper"""
+"""FastAPI application for Smart Store Sync"""
 
 import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from api.routes import router
 from contextlib import asynccontextmanager
+from api.routes import router
 from services.reminder_scheduler import ReminderScheduler
 from utils.logger import setup_logger
 
-
-setup_logger()
+setup_logger("api")
 logger = logging.getLogger(__name__)
 
-# Create scheduler instance
 reminder_scheduler = ReminderScheduler()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: Start the scheduler
     reminder_scheduler.start()
     yield
-    # Shutdown: Stop the scheduler
     reminder_scheduler.stop()
 
 
 app = FastAPI(
-    title="CartPE Product Scraper API",
-    description="API for accessing scraped product data",
+    title="Smart Store Sync API",
+    description="API for managing stores, subscriptions, and product data",
     version="1.0.0",
     lifespan=lifespan,
 )
 
-# Enable CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -41,14 +36,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include routes
 app.include_router(router)
 
 
 @app.get("/")
 def read_root():
     return {
-        "message": "CartPE Product Scraper API",
+        "message": "Smart Store Sync API",
         "version": "1.0.0",
         "endpoints": {
             "stores": "/api/stores",
