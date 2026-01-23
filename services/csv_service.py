@@ -167,7 +167,7 @@ class CSVService:
     def push_csv_in_chunks(
         csv_path: str, subscription_id: int, chunk_size: int = 300
     ) -> Dict:
-        """Push CSV file in chunks to WordPress API with multi-threading"""
+        """Push CSV file in chunks to WordPress API sequentially"""
         try:
             with DatabaseManager.get_connection() as conn:
                 cursor = conn.cursor(dictionary=True)
@@ -261,28 +261,22 @@ class CSVService:
                             if chunk_path and os.path.exists(chunk_path):
                                 os.remove(chunk_path)
 
-                # Send chunks in parallel
-                with ThreadPoolExecutor(max_workers=3) as executor:
-                    future_to_chunk = {
-                        executor.submit(send_chunk, i, chunk): i
-                        for i, chunk in enumerate(chunks)
-                    }
+                # Send chunks sequentially
+                for i, chunk in enumerate(chunks):
+                    chunk_result = send_chunk(i, chunk)
 
-                    for future in as_completed(future_to_chunk):
-                        chunk_result = future.result()
+                    if chunk_result["status"] == "success":
+                        results["success"] += 1
+                        logger.info(
+                            f"✓ Chunk {chunk_result['chunk']} pushed successfully"
+                        )
+                    else:
+                        results["failed"] += 1
+                        logger.error(
+                            f"✗ Chunk {chunk_result['chunk']} failed: {chunk_result.get('error')}"
+                        )
 
-                        if chunk_result["status"] == "success":
-                            results["success"] += 1
-                            logger.info(
-                                f"✓ Chunk {chunk_result['chunk']} pushed successfully"
-                            )
-                        else:
-                            results["failed"] += 1
-                            logger.error(
-                                f"✗ Chunk {chunk_result['chunk']} failed: {chunk_result.get('error')}"
-                            )
-
-                        results["details"].append(chunk_result)
+                    results["details"].append(chunk_result)
 
                 logger.info(
                     f"Push complete for {buyer_domain}: "
