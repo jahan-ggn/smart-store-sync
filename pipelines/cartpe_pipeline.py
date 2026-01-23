@@ -237,7 +237,7 @@ def scrape_store_products(store_data: dict) -> tuple:
                 scraper.close()
 
         # Process categories in parallel (max 5 concurrent)
-        with ThreadPoolExecutor(max_workers=5) as executor:
+        with ThreadPoolExecutor(max_workers=3) as executor:
             futures = {executor.submit(scrape_category, cat): cat for cat in categories}
 
             for future in as_completed(futures):
