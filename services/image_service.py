@@ -27,7 +27,10 @@ class ImageService:
 
     _vpn_lock = threading.Lock()
     _vpn_last_restart = 0
-    _vpn_restart_cooldown = 30  # seconds between restart attempts
+    _vpn_restart_cooldown = 30
+    _vpn_interfaces = ["tun0", "tun1"]
+    _vpn_counter = 0
+    _vpn_counter_lock = threading.Lock()
 
     def __init__(self):
         """Initialize R2 client"""
@@ -44,50 +47,55 @@ class ImageService:
         self.global_vpn_enabled = getattr(settings, "USE_VPN", False)
 
     @classmethod
-    def _is_vpn_up(cls) -> bool:
-        """Check if VPN interface tun0 exists and is up"""
+    def _is_vpn_up(cls, interface: str = "tun0") -> bool:
+        """Check if VPN interface exists and is up"""
         try:
             result = subprocess.run(
-                ["ip", "link", "show", "tun0"],
+                ["ip", "link", "show", interface],
                 capture_output=True,
                 text=True,
                 timeout=10,
             )
             return result.returncode == 0 and "UP" in result.stdout
         except Exception as e:
-            logger.error(f"Error checking VPN status: {e}")
+            logger.error(f"Error checking VPN status ({interface}): {e}")
             return False
 
     @classmethod
-    def _restart_vpn(cls) -> bool:
+    def _restart_vpn(cls, interface: str = "tun0") -> bool:
         """Restart VPN connection with cooldown to prevent rapid restarts"""
         current_time = time.time()
 
-        with cls._vpn_lock:
-            # Check cooldown
-            if current_time - cls._vpn_last_restart < cls._vpn_restart_cooldown:
-                logger.info("VPN restart skipped (cooldown active)")
-                # Wait a bit and check if another thread fixed it
-                time.sleep(5)
-                return cls._is_vpn_up()
+        # Map interface to config file
+        vpn_configs = {
+            "tun0": "/etc/openvpn/ro-free-5.protonvpn.udp.ovpn",
+            "tun1": "/etc/openvpn/ro-free-9.protonvpn.udp.ovpn",
+        }
 
-            logger.warning("VPN appears down. Attempting restart...")
+        with cls._vpn_lock:
+            if current_time - cls._vpn_last_restart < cls._vpn_restart_cooldown:
+                logger.info(f"VPN restart skipped (cooldown active) for {interface}")
+                time.sleep(5)
+                return cls._is_vpn_up(interface)
+
+            logger.warning(f"VPN ({interface}) appears down. Attempting restart...")
 
             try:
-                # Kill existing openvpn processes
+                # Kill only this interface's process
                 subprocess.run(
-                    ["pkill", "-f", "openvpn"],
+                    ["pkill", "-f", vpn_configs[interface]],
                     capture_output=True,
                     timeout=10,
                 )
                 time.sleep(2)
 
-                # Start VPN
                 result = subprocess.run(
                     [
                         "openvpn",
                         "--config",
-                        "/etc/openvpn/ro-free-5.protonvpn.udp.ovpn",
+                        vpn_configs[interface],
+                        "--dev",
+                        interface,
                         "--daemon",
                     ],
                     capture_output=True,
@@ -96,50 +104,64 @@ class ImageService:
                 )
 
                 if result.returncode != 0:
-                    logger.error(f"VPN start failed: {result.stderr}")
+                    logger.error(f"VPN start failed ({interface}): {result.stderr}")
                     return False
 
-                # Wait for tun0 to come up
                 for _ in range(10):
                     time.sleep(2)
-                    if cls._is_vpn_up():
+                    if cls._is_vpn_up(interface):
                         cls._vpn_last_restart = current_time
-                        logger.info("VPN restarted successfully")
+                        logger.info(f"VPN ({interface}) restarted successfully")
                         return True
 
-                logger.error("VPN failed to come up after restart")
+                logger.error(f"VPN ({interface}) failed to come up after restart")
                 return False
 
             except Exception as e:
-                logger.error(f"Error restarting VPN: {e}")
+                logger.error(f"Error restarting VPN ({interface}): {e}")
                 return False
 
-    def _ensure_vpn_up(self) -> bool:
+    def _ensure_vpn_up(self, interface: str = "tun0") -> bool:
         """Ensure VPN is up, restart if needed"""
-        if self._is_vpn_up():
+        if self._is_vpn_up(interface):
             return True
-        return self._restart_vpn()
+        return self._restart_vpn(interface)
 
-    def _download_via_vpn(self, url: str, temp_path: str, timeout: int = 360) -> bool:
+    @classmethod
+    def _get_next_vpn_interface(cls) -> str:
+        """Round-robin between VPN interfaces"""
+        with cls._vpn_counter_lock:
+            interface = cls._vpn_interfaces[cls._vpn_counter % len(cls._vpn_interfaces)]
+            cls._vpn_counter += 1
+            return interface
+
+    def _download_via_vpn(
+        self, url: str, temp_path: str, timeout: int = 360, interface: str = None
+    ) -> bool:
         """Download file using curl through VPN interface with better error handling"""
         referer = "/".join(url.split("/")[:3]) + "/"
 
+        # Get interface via round-robin if not specified
+        if interface is None:
+            interface = self._get_next_vpn_interface()
+
         # First ensure VPN is up
-        if not self._ensure_vpn_up():
-            logger.error(f"Cannot download {url}: VPN is down and restart failed")
+        if not self._ensure_vpn_up(interface):
+            logger.error(
+                f"Cannot download {url}: VPN ({interface}) is down and restart failed"
+            )
             return False
 
         try:
-            # Use -w to capture HTTP status code, remove -f to get better errors
             result = subprocess.run(
                 [
                     "/usr/bin/curl",
                     "--interface",
-                    "tun0",
+                    interface,  # Use the selected interface
                     "-s",
                     "-L",
                     "-w",
-                    "\n%{http_code}",  # Append HTTP status code
+                    "\n%{http_code}",
                     "-H",
                     f"User-Agent: {settings.USER_AGENT}",
                     "-H",
@@ -153,26 +175,23 @@ class ImageService:
                 timeout=timeout,
             )
 
-            # Parse HTTP status from output
             stdout_lines = result.stdout.strip().split("\n")
             http_code = stdout_lines[-1] if stdout_lines else "000"
 
             if result.returncode != 0:
-                # Check if it's a VPN-related error
                 if result.returncode in VPN_ERROR_CODES:
                     logger.warning(
-                        f"VPN error (code {result.returncode}) downloading {url}. "
+                        f"VPN error (code {result.returncode}) on {interface} downloading {url}. "
                         f"Attempting VPN restart..."
                     )
-                    if self._restart_vpn():
-                        # Retry once after VPN restart
+                    if self._restart_vpn(interface):
                         logger.info(f"Retrying download after VPN restart: {url}")
                         return self._download_via_vpn_single_attempt(
-                            url, temp_path, referer, timeout
+                            url, temp_path, referer, timeout, interface
                         )
                     else:
                         raise Exception(
-                            f"VPN down (curl code {result.returncode}) and restart failed"
+                            f"VPN down ({interface}, curl code {result.returncode}) and restart failed"
                         )
                 else:
                     raise Exception(
@@ -180,7 +199,6 @@ class ImageService:
                         f"HTTP status: {http_code}, stderr: {result.stderr}"
                     )
 
-            # Check HTTP status code
             if http_code.startswith(("4", "5")):
                 raise Exception(f"HTTP error {http_code} for {url}")
 
@@ -192,7 +210,7 @@ class ImageService:
             raise Exception(str(e))
 
     def _download_via_vpn_single_attempt(
-        self, url: str, temp_path: str, referer: str, timeout: int
+        self, url: str, temp_path: str, referer: str, timeout: int, interface: str
     ) -> bool:
         """Single download attempt without VPN restart logic (used for retry)"""
         try:
@@ -200,7 +218,7 @@ class ImageService:
                 [
                     "/usr/bin/curl",
                     "--interface",
-                    "tun0",
+                    interface,
                     "-s",
                     "-L",
                     "-w",
@@ -515,7 +533,7 @@ class ImageService:
 
             # Process non-VPN first (fast), then VPN (throttled)
             process_batch(non_vpn_products, max_workers=20, label="non-VPN")
-            process_batch(vpn_products, max_workers=6, label="VPN")
+            process_batch(vpn_products, max_workers=10, label="VPN")
 
             logger.info(
                 f"Image processing complete: {success} success, {failed} failed"
@@ -672,7 +690,7 @@ class ImageService:
 
             # Process non-VPN first (fast), then VPN (throttled)
             process_batch(non_vpn_products, max_workers=12, label="non-VPN")
-            process_batch(vpn_products, max_workers=4, label="VPN")
+            process_batch(vpn_products, max_workers=8, label="VPN")
 
             logger.info(
                 f"Video processing complete: {success} success, {failed} failed"
