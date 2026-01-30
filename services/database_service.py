@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import List, Dict, Optional
 from config.database import DatabaseManager
 from config.settings import settings
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -173,7 +174,7 @@ class ProductService:
     """Service class for product-related database operations"""
 
     @staticmethod
-    def bulk_upsert_products(products: List[Dict]) -> int:
+    def bulk_upsert_products(products: List[Dict], max_retries: int = 3) -> int:
         """Bulk insert or update products"""
         if not products:
             return 0
@@ -220,105 +221,120 @@ class ProductService:
             )
         """
 
-        try:
-            now = datetime.now()
+        for attempt in range(max_retries):
+            try:
+                now = datetime.now()
 
-            with DatabaseManager.get_connection() as conn:
-                cursor = conn.cursor(dictionary=True)
+                with DatabaseManager.get_connection() as conn:
+                    cursor = conn.cursor(dictionary=True)
 
-                for prod in products:
-                    # Get brand_id
-                    brand_id = prod.get("brand_id")
-                    if not brand_id and prod.get("brand_name"):
-                        brand_id = BrandService.get_or_create_brand(prod["brand_name"])
+                    for prod in products:
+                        # Get brand_id
+                        brand_id = prod.get("brand_id")
+                        if not brand_id and prod.get("brand_name"):
+                            brand_id = BrandService.get_or_create_brand(
+                                prod["brand_name"]
+                            )
 
-                    # Serialize attributes if present
-                    attributes = prod.get("attributes")
-                    if isinstance(attributes, list):
-                        attributes = json.dumps(attributes) if attributes else None
+                        # Serialize attributes if present
+                        attributes = prod.get("attributes")
+                        if isinstance(attributes, list):
+                            attributes = json.dumps(attributes) if attributes else None
 
-                    data = (
-                        prod["store_id"],
-                        prod["store_name"],
-                        prod["external_product_id"],
-                        prod["product_name"],
-                        prod.get("product_url"),
-                        prod.get("image_url"),
-                        prod.get("source_image_url"),
-                        prod.get("image_url_transparent"),
-                        prod.get("product_images"),
-                        prod.get("current_price"),
-                        prod.get("original_price"),
-                        prod.get("has_variants", False),
-                        prod.get("variants"),
-                        prod.get("stock_status", "in_stock"),
-                        True,  # is_active
-                        brand_id,
-                        prod.get("video_url"),
-                        prod.get("short_description"),
-                        prod.get("description"),
-                        attributes,
-                        now,  # last_synced_at
-                        now,  # created_at
-                        now,  # updated_at
+                        data = (
+                            prod["store_id"],
+                            prod["store_name"],
+                            prod["external_product_id"],
+                            prod["product_name"],
+                            prod.get("product_url"),
+                            prod.get("image_url"),
+                            prod.get("source_image_url"),
+                            prod.get("image_url_transparent"),
+                            prod.get("product_images"),
+                            prod.get("current_price"),
+                            prod.get("original_price"),
+                            prod.get("has_variants", False),
+                            prod.get("variants"),
+                            prod.get("stock_status", "in_stock"),
+                            True,  # is_active
+                            brand_id,
+                            prod.get("video_url"),
+                            prod.get("short_description"),
+                            prod.get("description"),
+                            attributes,
+                            now,  # last_synced_at
+                            now,  # created_at
+                            now,  # updated_at
+                        )
+
+                        cursor.execute(query, data)
+                        product_id = cursor.lastrowid
+
+                        # If update, get the existing id
+                        if not product_id:
+                            cursor.execute(
+                                "SELECT id FROM products WHERE store_id = %s AND external_product_id = %s",
+                                (prod["store_id"], prod["external_product_id"]),
+                            )
+                            result = cursor.fetchone()
+                            product_id = result["id"] if result else None
+
+                        # Insert categories into junction table
+                        if product_id and prod.get("categories"):
+                            cursor.execute(
+                                "DELETE FROM product_categories WHERE product_id = %s",
+                                (product_id,),
+                            )
+
+                            for cat in prod["categories"]:
+                                cat_id = None
+                                if cat.get("external_category_id"):
+                                    cat_id = (
+                                        CategoryService.get_category_id_by_external_id(
+                                            prod["store_id"],
+                                            cat["external_category_id"],
+                                        )
+                                    )
+                                elif cat.get("category_slug"):
+                                    cat_id = CategoryService.get_category_id_by_slug(
+                                        prod["store_id"], cat["category_slug"]
+                                    )
+
+                                if cat_id:
+                                    cursor.execute(
+                                        "INSERT IGNORE INTO product_categories (product_id, category_id) VALUES (%s, %s)",
+                                        (product_id, cat_id),
+                                    )
+
+                        # For CartPE (single category_id passed directly)
+                        elif product_id and prod.get("category_id"):
+                            cursor.execute(
+                                "DELETE FROM product_categories WHERE product_id = %s",
+                                (product_id,),
+                            )
+                            cursor.execute(
+                                "INSERT IGNORE INTO product_categories (product_id, category_id) VALUES (%s, %s)",
+                                (product_id, prod["category_id"]),
+                            )
+
+                    conn.commit()
+
+                logger.info(f"Upserted {len(products)} products into database")
+                return len(products)
+
+            except Exception as e:
+                # Check for deadlock error (MySQL error 1213)
+                if "1213" in str(e) and attempt < max_retries - 1:
+                    wait_time = 2**attempt
+                    logger.warning(
+                        f"Deadlock detected, retrying in {wait_time}s (attempt {attempt + 1})"
                     )
+                    time.sleep(wait_time)
+                    continue
+                logger.error(f"Error bulk upserting products: {e}")
+                return 0
 
-                    cursor.execute(query, data)
-                    product_id = cursor.lastrowid
-
-                    # If update, get the existing id
-                    if not product_id:
-                        cursor.execute(
-                            "SELECT id FROM products WHERE store_id = %s AND external_product_id = %s",
-                            (prod["store_id"], prod["external_product_id"]),
-                        )
-                        result = cursor.fetchone()
-                        product_id = result["id"] if result else None
-
-                    # Insert categories into junction table
-                    if product_id and prod.get("categories"):
-                        # Clear existing categories for this product
-                        cursor.execute(
-                            "DELETE FROM product_categories WHERE product_id = %s",
-                            (product_id,),
-                        )
-
-                        for cat in prod["categories"]:
-                            cat_id = None
-                            if cat.get("external_category_id"):
-                                cat_id = CategoryService.get_category_id_by_external_id(
-                                    prod["store_id"], cat["external_category_id"]
-                                )
-                            elif cat.get("category_slug"):
-                                cat_id = CategoryService.get_category_id_by_slug(
-                                    prod["store_id"], cat["category_slug"]
-                                )
-
-                            if cat_id:
-                                cursor.execute(
-                                    "INSERT IGNORE INTO product_categories (product_id, category_id) VALUES (%s, %s)",
-                                    (product_id, cat_id),
-                                )
-
-                    # For CartPE (single category_id passed directly)
-                    elif product_id and prod.get("category_id"):
-                        cursor.execute(
-                            "DELETE FROM product_categories WHERE product_id = %s",
-                            (product_id,),
-                        )
-                        cursor.execute(
-                            "INSERT IGNORE INTO product_categories (product_id, category_id) VALUES (%s, %s)",
-                            (product_id, prod["category_id"]),
-                        )
-
-                conn.commit()
-
-            logger.info(f"Upserted {len(products)} products into database")
-            return len(products)
-
-        except Exception as e:
-            logger.error(f"Error bulk upserting products: {e}")
-            return 0
+        return 0
 
     @staticmethod
     def mark_category_products_inactive(store_id: int, category_id: int) -> int:
