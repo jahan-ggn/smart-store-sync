@@ -19,7 +19,7 @@ from config.database import DatabaseManager
 logger = logging.getLogger(__name__)
 
 # VPN-related curl exit codes
-VPN_ERROR_CODES = {45, 55, 56}  # Interface/network errors indicating VPN down
+VPN_ERROR_CODES = {35, 45, 55, 56}  # Interface/network errors indicating VPN down
 
 
 class ImageService:
@@ -47,19 +47,39 @@ class ImageService:
         self.global_vpn_enabled = getattr(settings, "USE_VPN", False)
 
     @classmethod
-    def _is_vpn_up(cls, interface: str = "tun0") -> bool:
+    def _is_vpn_up(cls, interface: str = None) -> bool:
         """Check if VPN interface exists and is up"""
         try:
-            result = subprocess.run(
-                ["ip", "link", "show", interface],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            return result.returncode == 0 and "UP" in result.stdout
-        except Exception as e:
-            logger.error(f"Error checking VPN status ({interface}): {e}")
+            interfaces = [interface] if interface else ["tun0", "tun1"]
+            for iface in interfaces:
+                result = subprocess.run(
+                    ["ip", "link", "show", iface],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                if result.returncode == 0 and "UP" in result.stdout:
+                    return True
             return False
+        except Exception as e:
+            logger.error(f"Error checking VPN status: {e}")
+            return False
+
+    def _get_vpn_interface(self) -> Optional[str]:
+        """Get the active VPN interface name"""
+        for interface in ["tun0", "tun1"]:
+            try:
+                result = subprocess.run(
+                    ["ip", "link", "show", interface],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                if result.returncode == 0 and "UP" in result.stdout:
+                    return interface
+            except Exception:
+                continue
+        return None
 
     @classmethod
     def _restart_vpn(cls, interface: str = "tun0") -> bool:
@@ -121,35 +141,23 @@ class ImageService:
                 logger.error(f"Error restarting VPN ({interface}): {e}")
                 return False
 
-    def _ensure_vpn_up(self, interface: str = "tun0") -> bool:
+    def _ensure_vpn_up(self, interface: str = None) -> bool:
         """Ensure VPN is up, restart if needed"""
         if self._is_vpn_up(interface):
             return True
-        return self._restart_vpn(interface)
+        return self._restart_vpn(interface or "tun0")
 
-    @classmethod
-    def _get_next_vpn_interface(cls) -> str:
-        """Round-robin between VPN interfaces"""
-        with cls._vpn_counter_lock:
-            interface = cls._vpn_interfaces[cls._vpn_counter % len(cls._vpn_interfaces)]
-            cls._vpn_counter += 1
-            return interface
-
-    def _download_via_vpn(
-        self, url: str, temp_path: str, timeout: int = 120, interface: str = None
-    ) -> bool:
+    def _download_via_vpn(self, url: str, temp_path: str, timeout: int = 360) -> bool:
         """Download file using curl through VPN interface with better error handling"""
         referer = "/".join(url.split("/")[:3]) + "/"
 
-        # Get interface via round-robin if not specified
-        if interface is None:
-            interface = self._get_next_vpn_interface()
+        if not self._ensure_vpn_up():
+            logger.error(f"Cannot download {url}: VPN is down and restart failed")
+            return False
 
-        # First ensure VPN is up
-        if not self._ensure_vpn_up(interface):
-            logger.error(
-                f"Cannot download {url}: VPN ({interface}) is down and restart failed"
-            )
+        interface = self._get_vpn_interface()
+        if not interface:
+            logger.error(f"Cannot download {url}: No VPN interface found")
             return False
 
         try:
@@ -157,7 +165,7 @@ class ImageService:
                 [
                     "/usr/bin/curl",
                     "--interface",
-                    interface,  # Use the selected interface
+                    interface,
                     "-s",
                     "-L",
                     "-w",
@@ -187,11 +195,11 @@ class ImageService:
                     if self._restart_vpn(interface):
                         logger.info(f"Retrying download after VPN restart: {url}")
                         return self._download_via_vpn_single_attempt(
-                            url, temp_path, referer, timeout, interface
+                            url, temp_path, referer, timeout
                         )
                     else:
                         raise Exception(
-                            f"VPN down ({interface}, curl code {result.returncode}) and restart failed"
+                            f"VPN down (curl code {result.returncode}) and restart failed"
                         )
                 else:
                     raise Exception(
@@ -210,9 +218,13 @@ class ImageService:
             raise Exception(str(e))
 
     def _download_via_vpn_single_attempt(
-        self, url: str, temp_path: str, referer: str, timeout: int, interface: str
+        self, url: str, temp_path: str, referer: str, timeout: int
     ) -> bool:
         """Single download attempt without VPN restart logic (used for retry)"""
+        interface = self._get_vpn_interface()
+        if not interface:
+            raise Exception("No VPN interface available")
+
         try:
             result = subprocess.run(
                 [

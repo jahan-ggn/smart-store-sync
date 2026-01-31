@@ -40,51 +40,27 @@ class DatabaseManager:
 
     @classmethod
     @contextmanager
-    def get_connection(cls, max_retries=3, retry_delay=1):
-        """Context manager for database connections with retry logic"""
+    def get_connection(cls):
+        """Context manager for database connections"""
         if cls._pool is None:
             cls.initialize_pool()
 
         connection = None
-        last_error = None
-
-        for attempt in range(max_retries):
-            try:
-                connection = cls._pool.get_connection()
-                yield connection
-                connection.commit()
-                return
-            except Error as e:
-                last_error = e
-                if connection:
-                    try:
-                        connection.rollback()
-                    except:
-                        pass
-
-                error_code = getattr(e, "errno", None)
-                error_msg = str(e).lower()
-
-                # Retry on pool exhausted or deadlock
-                is_pool_exhausted = "pool exhausted" in error_msg
-                is_deadlock = error_code == 1213 or "deadlock" in error_msg
-
-                if (is_pool_exhausted or is_deadlock) and attempt < max_retries - 1:
-                    wait_time = retry_delay * (2**attempt)
-                    logger.warning(
-                        f"DB error (attempt {attempt + 1}), retrying in {wait_time}s: {e}"
-                    )
-                    time.sleep(wait_time)
-                    continue
-
-                logger.error(f"Database error: {e}")
-                raise
-            finally:
-                if connection and connection.is_connected():
-                    connection.close()
-
-        if last_error:
-            raise last_error
+        try:
+            connection = cls._pool.get_connection()
+            yield connection
+            connection.commit()
+        except Error as e:
+            if connection:
+                try:
+                    connection.rollback()
+                except:
+                    pass
+            logger.error(f"Database error: {e}")
+            raise
+        finally:
+            if connection and connection.is_connected():
+                connection.close()
 
     @classmethod
     def execute_query(cls, query, params=None, fetch=False):
