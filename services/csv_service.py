@@ -32,7 +32,7 @@ class CSVService:
 
                 # Get subscription details
                 cursor.execute(
-                    """SELECT buyer_domain, last_push_at 
+                    """SELECT buyer_domain 
                     FROM api_subscriptions 
                     WHERE id = %s AND expires_at > NOW()""",
                     (subscription_id,),
@@ -44,24 +44,20 @@ class CSVService:
                     return None
 
                 buyer_domain = subscription["buyer_domain"]
-                last_push_at = subscription["last_push_at"]
-                is_full_load = last_push_at is None
 
-                # Get selected stores for this subscription
+                # Check if any stores are selected
                 cursor.execute(
                     """SELECT store_id FROM subscription_permissions 
                     WHERE subscription_id = %s""",
                     (subscription_id,),
                 )
-                store_ids = [row["store_id"] for row in cursor.fetchall()]
+                store_rows = cursor.fetchall()
 
-                if not store_ids:
+                if not store_rows:
                     logger.warning(
                         f"No stores selected for subscription {subscription_id}"
                     )
                     return None
-
-                placeholders = ",".join(["%s"] * len(store_ids))
 
                 select_columns = """
                     p.id, p.store_id, p.store_name, p.external_product_id as product_id,
@@ -72,32 +68,23 @@ class CSVService:
                     GROUP_CONCAT(DISTINCT c.category_id ORDER BY c.category_id SEPARATOR ', ') as categories
                 """
 
-                if is_full_load:
-                    query = f"""
-                        SELECT {select_columns}
-                        FROM products p
-                        LEFT JOIN brands b ON p.brand_id = b.brand_id
-                        LEFT JOIN product_categories pc ON p.id = pc.product_id
-                        LEFT JOIN categories c ON pc.category_id = c.category_id
-                        WHERE p.store_id IN ({placeholders})
-                        AND p.image_url IS NOT NULL AND p.image_url != ''
-                        GROUP BY p.id
-                    """
-                    cursor.execute(query, store_ids)
-                else:
-                    query = f"""
-                        SELECT {select_columns}
-                        FROM products p
-                        LEFT JOIN brands b ON p.brand_id = b.brand_id
-                        LEFT JOIN product_categories pc ON p.id = pc.product_id
-                        LEFT JOIN categories c ON pc.category_id = c.category_id
-                        WHERE p.store_id IN ({placeholders})
-                        AND (p.updated_at > %s OR p.created_at > %s)
-                        AND p.image_url IS NOT NULL AND p.image_url != ''
-                        GROUP BY p.id
-                    """
-                    cursor.execute(query, store_ids + [last_push_at, last_push_at])
-
+                query = f"""
+                    SELECT {select_columns}
+                    FROM products p
+                    JOIN subscription_permissions sp 
+                        ON p.store_id = sp.store_id AND sp.subscription_id = %s
+                    LEFT JOIN brands b ON p.brand_id = b.brand_id
+                    LEFT JOIN product_categories pc ON p.id = pc.product_id
+                    LEFT JOIN categories c ON pc.category_id = c.category_id
+                    WHERE p.image_url IS NOT NULL AND p.image_url != ''
+                    AND (
+                        sp.last_push_at IS NULL
+                        OR p.updated_at > sp.last_push_at
+                        OR p.created_at > sp.last_push_at
+                    )
+                    GROUP BY p.id
+                """
+                cursor.execute(query, (subscription_id,))
                 products = cursor.fetchall()
 
                 if not products:
@@ -152,7 +139,7 @@ class CSVService:
 
                 logger.info(
                     f"Generated CSV for subscription {subscription_id}: "
-                    f"{len(products)} products, {'full' if is_full_load else 'incremental'} load"
+                    f"{len(products)} products"
                 )
 
                 return str(csv_path)

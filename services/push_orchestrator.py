@@ -20,9 +20,11 @@ class PushOrchestrator:
                 cursor = conn.cursor(dictionary=True)
 
                 # Get all active subscriptions
-                cursor.execute("""SELECT id, buyer_domain 
+                cursor.execute(
+                    """SELECT id, buyer_domain 
                        FROM api_subscriptions 
-                       WHERE expires_at > NOW()""")
+                       WHERE expires_at > NOW()"""
+                )
                 subscriptions = cursor.fetchall()
 
                 logger.info(f"Found {len(subscriptions)} active subscriptions")
@@ -56,17 +58,25 @@ class PushOrchestrator:
                             )
                             continue
 
+                        logger.info(f"CSV generated for {buyer_domain}: {csv_path}")
+
                         # Push to WordPress
                         push_result = CSVService.push_csv_in_chunks(
                             csv_path, subscription_id, chunk_size=300
                         )
 
-                        # Update last_push_at
-                        cursor.execute(
-                            "UPDATE api_subscriptions SET last_push_at = %s WHERE id = %s",
-                            (datetime.now(), subscription_id),
-                        )
-                        conn.commit()
+                        # Update last_push_at only if all chunks succeeded
+                        if push_result["failed"] == 0:
+                            cursor.execute(
+                                "UPDATE subscription_permissions SET last_push_at = %s WHERE subscription_id = %s",
+                                (datetime.now(), subscription_id),
+                            )
+                            conn.commit()
+                        else:
+                            logger.warning(
+                                f"Skipping last_push_at update for {buyer_domain}: "
+                                f"{push_result['failed']} chunks failed"
+                            )
 
                         results["success"] += 1
                         results["details"].append(
