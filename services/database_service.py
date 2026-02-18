@@ -2,12 +2,47 @@
 
 import json
 import logging
+import time
 from datetime import datetime
+from functools import wraps
 from typing import List, Dict, Optional
+
 from config.database import DatabaseManager
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
+
+
+def retry_on_deadlock(max_retries=3, retry_delay=1):
+    """Decorator to retry function on deadlock"""
+
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            last_error = None
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    error_code = getattr(e, "errno", None)
+                    error_msg = str(e).lower()
+                    is_deadlock = error_code == 1213 or "deadlock" in error_msg
+
+                    if is_deadlock and attempt < max_retries - 1:
+                        wait_time = retry_delay * (2**attempt)
+                        logger.warning(
+                            f"Deadlock (attempt {attempt + 1}), retrying in {wait_time}s"
+                        )
+                        time.sleep(wait_time)
+                        last_error = e
+                        continue
+                    raise
+            if last_error:
+                raise last_error
+
+        return wrapper
+
+    return decorator
 
 
 class StoreService:
@@ -173,6 +208,7 @@ class ProductService:
     """Service class for product-related database operations"""
 
     @staticmethod
+    @retry_on_deadlock(max_retries=3, retry_delay=1)
     def bulk_upsert_products(products: List[Dict]) -> int:
         """Bulk insert or update products"""
         if not products:
@@ -277,7 +313,6 @@ class ProductService:
 
                     # Insert categories into junction table
                     if product_id and prod.get("categories"):
-                        # Clear existing categories for this product
                         cursor.execute(
                             "DELETE FROM product_categories WHERE product_id = %s",
                             (product_id,),
@@ -318,7 +353,7 @@ class ProductService:
 
         except Exception as e:
             logger.error(f"Error bulk upserting products: {e}")
-            return 0
+            raise
 
     @staticmethod
     def mark_category_products_inactive(store_id: int, category_id: int) -> int:

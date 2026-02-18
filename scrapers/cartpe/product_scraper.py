@@ -253,7 +253,7 @@ class ProductScraper:
             # Fetch images in parallel
             image_results = {}
             if products_needing_images:
-                with ThreadPoolExecutor(max_workers=10) as executor:
+                with ThreadPoolExecutor(max_workers=15) as executor:
                     futures = {
                         executor.submit(fetch_single_product_images, p): p
                         for p in products_needing_images

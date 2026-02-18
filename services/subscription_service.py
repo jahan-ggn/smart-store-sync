@@ -84,7 +84,7 @@ class SubscriptionService:
     def add_subscription_permissions(
         token: str, buyer_domain: str, store_ids: List[int]
     ) -> Dict:
-        """Set store permissions - validates token matches domain"""
+        """Set store permissions - diff-based to preserve last_push_at"""
         try:
             if not store_ids:
                 raise ValueError("store_ids cannot be empty")
@@ -123,14 +123,29 @@ class SubscriptionService:
                 if invalid_stores:
                     raise ValueError(f"Invalid store IDs: {invalid_stores}")
 
-                # Delete existing permissions
+                # Fetch existing store_ids for this subscription
                 cursor.execute(
-                    "DELETE FROM subscription_permissions WHERE subscription_id = %s",
+                    "SELECT store_id FROM subscription_permissions WHERE subscription_id = %s",
                     (subscription_id,),
                 )
+                existing_store_ids = {row["store_id"] for row in cursor.fetchall()}
 
-                # Insert new permissions
-                for store_id in store_ids:
+                requested_store_ids = set(store_ids)
+
+                # Compute diff
+                to_add = requested_store_ids - existing_store_ids
+                to_remove = existing_store_ids - requested_store_ids
+
+                # Delete deselected stores
+                if to_remove:
+                    rm_placeholders = ",".join(["%s"] * len(to_remove))
+                    cursor.execute(
+                        f"DELETE FROM subscription_permissions WHERE subscription_id = %s AND store_id IN ({rm_placeholders})",
+                        [subscription_id] + list(to_remove),
+                    )
+
+                # Insert new stores only
+                for store_id in to_add:
                     cursor.execute(
                         "INSERT INTO subscription_permissions (subscription_id, store_id) VALUES (%s, %s)",
                         (subscription_id, store_id),
@@ -139,13 +154,18 @@ class SubscriptionService:
                 conn.commit()
 
                 logger.info(
-                    f"Set {len(store_ids)} store permissions for subscription {subscription_id}"
+                    f"Updated permissions for subscription {subscription_id}: "
+                    f"+{len(to_add)} added, -{len(to_remove)} removed, "
+                    f"{len(requested_store_ids - to_add)} preserved"
                 )
 
                 return {
                     "subscription_id": subscription_id,
                     "buyer_domain": buyer_domain,
-                    "total_stores": len(store_ids),
+                    "total_stores": len(requested_store_ids),
+                    "added": len(to_add),
+                    "removed": len(to_remove),
+                    "preserved": len(requested_store_ids - to_add),
                 }
 
         except Exception as e:
