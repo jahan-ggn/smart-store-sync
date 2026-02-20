@@ -209,10 +209,19 @@ class ProductService:
 
     @staticmethod
     @retry_on_deadlock(max_retries=3, retry_delay=1)
-    def bulk_upsert_products(products: List[Dict]) -> int:
-        """Bulk insert or update products"""
+    def bulk_upsert_products(products: List[Dict]) -> Dict:
+        """Bulk insert or update products, returning change metrics"""
+        metrics = {
+            "new": 0,
+            "price_changed": 0,
+            "stock_changed": 0,
+            "image_changed": 0,
+            "reactivated": 0,
+            "total": 0,
+        }
+
         if not products:
-            return 0
+            return metrics
 
         r2_domain = settings.R2_PUBLIC_URL.replace("https://", "").replace(
             "http://", ""
@@ -272,6 +281,31 @@ class ProductService:
                     attributes = prod.get("attributes")
                     if isinstance(attributes, list):
                         attributes = json.dumps(attributes) if attributes else None
+
+                    cursor.execute(
+                        "SELECT current_price, original_price, stock_status, source_image_url, is_active "
+                        "FROM products WHERE store_id = %s AND external_product_id = %s",
+                        (prod["store_id"], prod["external_product_id"]),
+                    )
+                    existing = cursor.fetchone()
+
+                    if existing is None:
+                        metrics["new"] += 1
+                    else:
+                        if existing["current_price"] != prod.get(
+                            "current_price"
+                        ) or existing["original_price"] != prod.get("original_price"):
+                            metrics["price_changed"] += 1
+                        if existing["stock_status"] != prod.get(
+                            "stock_status", "in_stock"
+                        ):
+                            metrics["stock_changed"] += 1
+                        if existing["source_image_url"] != prod.get("source_image_url"):
+                            metrics["image_changed"] += 1
+                        if not existing["is_active"]:
+                            metrics["reactivated"] += 1
+
+                    metrics["total"] += 1
 
                     data = (
                         prod["store_id"],
@@ -348,8 +382,13 @@ class ProductService:
 
                 conn.commit()
 
-            logger.info(f"Upserted {len(products)} products into database")
-            return len(products)
+            logger.info(
+                f"Upserted {metrics['total']} products "
+                f"(new: {metrics['new']}, price: {metrics['price_changed']}, "
+                f"stock: {metrics['stock_changed']}, image: {metrics['image_changed']}, "
+                f"reactivated: {metrics['reactivated']})"
+            )
+            return metrics
 
         except Exception as e:
             logger.error(f"Error bulk upserting products: {e}")

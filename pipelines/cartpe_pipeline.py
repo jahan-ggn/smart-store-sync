@@ -227,6 +227,12 @@ def run_category_scraping():
         return False
 
 
+def merge_metrics(target: dict, source: dict):
+    """Merge source metrics into target by summing values"""
+    for key in source:
+        target[key] = target.get(key, 0) + source[key]
+
+
 def scrape_store_products(store_data: dict) -> tuple:
     """Scrape all products for a single store with parallel category processing"""
     store_id = store_data["store_id"]
@@ -234,7 +240,14 @@ def scrape_store_products(store_data: dict) -> tuple:
     token_lock = get_store_token_lock(store_id)
 
     known_brands = BrandService.get_all_brands()
-    total_products = 0
+    store_metrics = {
+        "new": 0,
+        "price_changed": 0,
+        "stock_changed": 0,
+        "image_changed": 0,
+        "reactivated": 0,
+        "total": 0,
+    }
     failed_categories = 0
 
     try:
@@ -242,7 +255,7 @@ def scrape_store_products(store_data: dict) -> tuple:
 
         if not categories:
             logger.warning(f"No categories found for {store_name}")
-            return (store_id, store_name, 0, False)
+            return (store_id, store_name, store_metrics, False)
 
         logger.info(
             f"Processing {len(categories)} categories for {store_name} (parallel)"
@@ -250,7 +263,7 @@ def scrape_store_products(store_data: dict) -> tuple:
 
         def scrape_category(category):
             """Scrape a single category"""
-            nonlocal store_data  # Allow updating store_data's token
+            nonlocal store_data
 
             scraper = ProductScraper(
                 known_brands=known_brands, product_service=ProductService
@@ -262,20 +275,22 @@ def scrape_store_products(store_data: dict) -> tuple:
                 products = scraper.extract_products(store_data, category)
 
                 if products:
-                    ProductService.bulk_upsert_products(products)
+                    metrics = ProductService.bulk_upsert_products(products)
                     logger.info(
-                        f"Saved {len(products)} products for {category['category_name']}"
+                        f"Saved {metrics['total']} products for {category['category_name']} "
+                        f"(new: {metrics['new']}, price: {metrics['price_changed']}, "
+                        f"stock: {metrics['stock_changed']})"
                     )
-                    return (category["category_name"], len(products), None)
-                return (category["category_name"], 0, None)
+                    return (category["category_name"], metrics, None)
+                return (category["category_name"], None, None)
 
             except TokenExpiredException as e:
-                return (category["category_name"], 0, e)
+                return (category["category_name"], None, e)
             except Exception as e:
                 logger.error(
                     f"Error processing category {category['category_name']}: {e}"
                 )
-                return (category["category_name"], 0, None)
+                return (category["category_name"], None, None)
             finally:
                 scraper.close()
 
@@ -283,7 +298,7 @@ def scrape_store_products(store_data: dict) -> tuple:
             futures = {executor.submit(scrape_category, cat): cat for cat in categories}
 
             for future in as_completed(futures):
-                cat_name, count, error = future.result()
+                cat_name, metrics, error = future.result()
 
                 if error and isinstance(error, TokenExpiredException):
                     logger.warning(f"Token expired for {store_name}. Re-fetching...")
@@ -292,14 +307,16 @@ def scrape_store_products(store_data: dict) -> tuple:
                         store_data, store_id, store_name, token_lock
                     ):
                         cat = futures[future]
-                        retry_name, retry_count, _ = scrape_category(cat)
-                        total_products += retry_count
+                        retry_name, retry_metrics, _ = scrape_category(cat)
+                        if retry_metrics:
+                            merge_metrics(store_metrics, retry_metrics)
                     else:
                         failed_categories += 1
                 else:
-                    total_products += count
+                    if metrics:
+                        merge_metrics(store_metrics, metrics)
 
-        return (store_id, store_name, total_products, failed_categories == 0)
+        return (store_id, store_name, store_metrics, failed_categories == 0)
 
     except Exception as e:
         logger.error(f"Error processing store {store_name}: {e}")
@@ -307,7 +324,7 @@ def scrape_store_products(store_data: dict) -> tuple:
             error_message=f"Product scraping failed for {store_name}",
             stack_trace=traceback.format_exc(),
         )
-        return (store_id, store_name, 0, False)
+        return (store_id, store_name, store_metrics, False)
 
 
 def run_product_scraping():
@@ -321,11 +338,12 @@ def run_product_scraping():
 
         if not stores:
             logger.info("No CartPE stores found in database.")
-            return False
+            return False, {}
 
         logger.info(f"Scraping products for {len(stores)} stores")
 
-        successful, failed, total_products = 0, 0, 0
+        successful, failed = 0, 0
+        all_store_metrics = {}  # {store_id: {"store_name": ..., "metrics": {...}}}
 
         with ThreadPoolExecutor(max_workers=settings.MAX_WORKERS) as executor:
             futures = {
@@ -333,20 +351,29 @@ def run_product_scraping():
             }
 
             for future in as_completed(futures):
-                store_id, store_name, product_count, success = future.result()
+                store_id, store_name, store_metrics, success = future.result()
+
+                all_store_metrics[store_id] = {
+                    "store_name": store_name,
+                    "metrics": store_metrics,
+                }
 
                 if success:
                     successful += 1
-                    total_products += product_count
-                    logger.info(f"✓ Products scraped: {store_name} ({product_count})")
+                    logger.info(
+                        f"✓ Products scraped: {store_name} "
+                        f"(total: {store_metrics['total']}, new: {store_metrics['new']}, "
+                        f"price: {store_metrics['price_changed']}, stock: {store_metrics['stock_changed']})"
+                    )
                 else:
                     failed += 1
                     logger.error(f"✗ Products failed: {store_name}")
 
+        total_products = sum(m["metrics"]["total"] for m in all_store_metrics.values())
         logger.info(
             f"Product scraping complete: {total_products} products from {successful} stores\n"
         )
-        return failed == 0
+        return failed == 0, all_store_metrics
 
     except Exception as e:
         logger.error(f"Critical error in product scraping: {e}", exc_info=True)
@@ -354,7 +381,7 @@ def run_product_scraping():
             error_message="Product scraping step failed",
             stack_trace=traceback.format_exc(),
         )
-        return False
+        return False, {}
 
 
 def run_pipeline():
@@ -370,7 +397,8 @@ def run_pipeline():
         if not run_category_scraping():
             logger.warning("Category scraping had failures, but continuing...")
 
-        if not run_product_scraping():
+        scraping_success, all_store_metrics = run_product_scraping()
+        if not scraping_success:
             logger.warning("Product scraping had failures")
 
         logger.info("=" * 80)
@@ -392,7 +420,9 @@ def run_pipeline():
         logger.info("=" * 80)
 
         try:
-            push_results = PushOrchestrator.push_to_all_subscriptions()
+            push_results = PushOrchestrator.push_to_all_subscriptions(
+                store_metrics=all_store_metrics
+            )
             logger.info(
                 f"Push complete: {push_results['success']} success, "
                 f"{push_results['failed']} failed, {push_results['no_data']} no data"

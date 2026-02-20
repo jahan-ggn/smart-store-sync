@@ -3,6 +3,9 @@
 import logging
 from twilio.rest import Client
 from config.settings import settings
+from typing import Dict
+from datetime import datetime
+
 
 logger = logging.getLogger(__name__)
 
@@ -52,5 +55,29 @@ class WhatsAppService:
         message += f"Your Smart Store Sync subscription expires in *{days_left} days* ({expiry_date}).\n\n"
         message += "Renew now to continue receiving product updates.\n\n"
         message += "Reply RENEW for payment link."
+
+        service.send_message(to_number, message)
+
+    @staticmethod
+    def send_sync_analytics(to_number: str, buyer_domain: str, store_metrics: Dict):
+        """Send sync analytics message to subscriber after successful push"""
+        service = WhatsAppService()
+
+        message = f"📊 *Smart Store Sync Update*\n"
+        message += f"📅 {datetime.now().strftime('%d %b %Y')}\n"
+        message += f"🌐 {buyer_domain}\n\n"
+
+        for store_id, data in store_metrics.items():
+            store_name = data["store_name"]
+            m = data["metrics"]
+
+            message += f"🏪 *{store_name}*\n"
+            message += f"  • Total products synced: {m['total']}\n"
+            message += f"  • New products: {m['new']}\n"
+            message += f"  • Price updated: {m['price_changed']}\n"
+            message += f"  • Stock updated: {m['stock_changed']}\n"
+            message += f"  • Image changed: {m['image_changed']}\n\n"
+
+        message += "✅ Data pushed successfully!"
 
         service.send_message(to_number, message)
