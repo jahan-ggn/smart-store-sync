@@ -74,9 +74,7 @@ class WhatsAppService:
             message += f"🏪 *{store_name}*\n"
             message += f"  • Total products synced: {m['total']}\n"
             message += f"  • New products: {m['new']}\n"
-            message += f"  • Price updated: {m['price_changed']}\n"
-            message += f"  • Stock updated: {m['stock_changed']}\n"
-            message += f"  • Image changed: {m['image_changed']}\n\n"
+            message += f"  • Stock updated: {m['stock_changed']}\n\n"
 
         message += "✅ Data pushed successfully!"
 
