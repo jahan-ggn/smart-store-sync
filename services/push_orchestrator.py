@@ -13,15 +13,18 @@ class PushOrchestrator:
     """Orchestrates data push to all active subscriptions"""
 
     @staticmethod
-    def push_to_all_subscriptions() -> Dict:
+    def push_to_all_subscriptions(store_metrics: Dict = None) -> Dict:
         """Push data to all active subscriptions"""
+        if store_metrics is None:
+            store_metrics = {}
+
         try:
             with DatabaseManager.get_connection() as conn:
                 cursor = conn.cursor(dictionary=True)
 
-                # Get all active subscriptions
+                # Get all active subscriptions with whatsapp number
                 cursor.execute(
-                    """SELECT id, buyer_domain 
+                    """SELECT id, buyer_domain, whatsapp_number 
                        FROM api_subscriptions 
                        WHERE expires_at > NOW()"""
                 )
@@ -40,6 +43,7 @@ class PushOrchestrator:
                 for sub in subscriptions:
                     subscription_id = sub["id"]
                     buyer_domain = sub["buyer_domain"]
+                    whatsapp_number = sub.get("whatsapp_number")
 
                     try:
                         # Generate CSV
@@ -72,6 +76,32 @@ class PushOrchestrator:
                                 (datetime.now(), subscription_id),
                             )
                             conn.commit()
+
+                            # Send analytics WhatsApp to subscriber
+                            if store_metrics and whatsapp_number:
+                                # Get store_ids this subscription has access to
+                                cursor.execute(
+                                    "SELECT store_id FROM subscription_permissions WHERE subscription_id = %s",
+                                    (subscription_id,),
+                                )
+                                sub_store_ids = {
+                                    row["store_id"] for row in cursor.fetchall()
+                                }
+
+                                # Filter metrics to only relevant stores
+                                relevant_metrics = {
+                                    sid: data
+                                    for sid, data in store_metrics.items()
+                                    if sid in sub_store_ids
+                                    and data["metrics"]["total"] > 0
+                                }
+
+                                if relevant_metrics:
+                                    WhatsAppService.send_sync_analytics(
+                                        to_number=whatsapp_number,
+                                        buyer_domain=buyer_domain,
+                                        store_metrics=relevant_metrics,
+                                    )
                         else:
                             logger.warning(
                                 f"Skipping last_push_at update for {buyer_domain}: "
