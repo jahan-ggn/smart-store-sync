@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Dict
 from config.database import DatabaseManager
 from services.csv_service import CSVService
+from services.whatsapp_service import WhatsAppService
 
 logger = logging.getLogger(__name__)
 
