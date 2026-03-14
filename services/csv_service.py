@@ -34,12 +34,14 @@ def _is_shoe_category(category_names: str) -> bool:
 
 
 def _transform_ua_title(product_name: str) -> str:
-    """Replace 'semi ua' or standalone 'ua' with 'TOP BATCH UA'"""
+    """Remove 'semi ua' or standalone 'ua' and append 'TOP BATCH UA' at the end"""
     if not product_name:
         return product_name
-    return re.sub(
-        r"\b(?:semi\s+)?ua\b", "TOP BATCH UA", product_name, flags=re.IGNORECASE
-    ).strip()
+    if not re.search(r"\b(?:semi\s+)?ua\b", product_name, flags=re.IGNORECASE):
+        return product_name
+    result = re.sub(r"\b(?:semi\s+)?ua\b", "", product_name, flags=re.IGNORECASE)
+    result = re.sub(r"\s+", " ", result).strip()
+    return f"{result} TOP BATCH UA"
 
 
 class CSVService:
