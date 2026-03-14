@@ -17,6 +17,30 @@ from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
+UA_TRANSFORM_DOMAINS = [
+    "https://soleplay.shop",
+    "https://holykicks.store",
+    "https://snikr.in",
+]
+SHOE_CATEGORY_KEYWORDS = {"shoe", "shoes", "kick", "ua"}
+
+
+def _is_shoe_category(category_names: str) -> bool:
+    """Check if any category name contains shoe-related keywords"""
+    if not category_names:
+        return False
+    lower = category_names.lower()
+    return any(kw in lower for kw in SHOE_CATEGORY_KEYWORDS)
+
+
+def _transform_ua_title(product_name: str) -> str:
+    """Replace 'semi ua' or standalone 'ua' with 'TOP BATCH UA'"""
+    if not product_name:
+        return product_name
+    return re.sub(
+        r"\b(?:semi\s+)?ua\b", "TOP BATCH UA", product_name, flags=re.IGNORECASE
+    ).strip()
+
 
 class CSVService:
     """Service for generating CSV files for subscriptions"""
@@ -65,7 +89,8 @@ class CSVService:
                     p.current_price, p.original_price, p.stock_status, p.is_active,
                     p.last_synced_at, p.created_at, p.updated_at, p.has_variants, p.variants,
                     p.brand_id, b.brand_name, p.video_url, p.short_description, p.description, p.attributes,
-                    GROUP_CONCAT(DISTINCT c.category_id ORDER BY c.category_id SEPARATOR ', ') as categories
+                    GROUP_CONCAT(DISTINCT c.category_id ORDER BY c.category_id SEPARATOR ', ') as categories,
+                    GROUP_CONCAT(DISTINCT c.category_name ORDER BY c.category_id SEPARATOR ', ') as category_names
                 """
 
                 query = f"""
@@ -86,6 +111,15 @@ class CSVService:
                 """
                 cursor.execute(query, (subscription_id,))
                 products = cursor.fetchall()
+
+                if buyer_domain in UA_TRANSFORM_DOMAINS:
+                    for prod in products:
+                        if _is_shoe_category(prod.get("category_names")):
+                            prod["product_name"] = _transform_ua_title(
+                                prod["product_name"]
+                            )
+                for prod in products:
+                    prod.pop("category_names", None)
 
                 if not products:
                     logger.info(
