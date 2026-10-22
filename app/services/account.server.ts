@@ -160,3 +160,11 @@ export async function saveAccount(shop: string, form: FormData) {
     update: values,
   });
 }
+
+export async function getSavedPurchaseToken(shop: string) {
+  const saved = await db.accountSettings.findUnique({
+    where: { shop },
+  });
+
+  return saved ? decryptToken(saved.tokenEncrypted, shop) : null;
+}

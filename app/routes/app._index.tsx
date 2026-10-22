@@ -159,7 +159,7 @@ export default function AccountAndPlan() {
                 label="Default Profit Margin"
                 name="defaultMargin"
                 min={0}
-                step={0.01}
+                step={1}
                 value={settings.defaultMargin}
                 disabled={busy}
                 onInput={(event) =>
@@ -180,7 +180,7 @@ export default function AccountAndPlan() {
                 label="Minimum source price"
                 name="minPrice"
                 min={0}
-                step={0.01}
+                step={1}
                 value={settings.minPrice}
                 disabled={busy}
                 onInput={(event) =>
@@ -192,7 +192,7 @@ export default function AccountAndPlan() {
                 label="Maximum source price"
                 name="maxPrice"
                 min={0}
-                step={0.01}
+                step={1}
                 value={settings.maxPrice}
                 disabled={busy}
                 onInput={(event) =>
