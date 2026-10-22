@@ -7,6 +7,10 @@ export class StoresError extends Error {}
 type SourceStore = {
   id: number;
   name: string;
+  categories: {
+    id: number;
+    name: string;
+  }[];
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -115,9 +119,29 @@ export async function loadStores(shop: string) {
       throw new StoresError("Invalid store-list response.");
     }
 
+    if (!Array.isArray(store.categories)) {
+      throw new StoresError("Invalid category-list response.");
+    }
+
+    const categories = store.categories.map((category) => {
+      if (
+        !isRecord(category) ||
+        !isId(category.category_id) ||
+        typeof category.category_name !== "string"
+      ) {
+        throw new StoresError("Invalid category-list response.");
+      }
+
+      return {
+        id: category.category_id,
+        name: category.category_name,
+      };
+    });
+
     return {
       id: store.store_id,
       name: store.store_name,
+      categories,
     };
   });
 

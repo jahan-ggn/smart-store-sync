@@ -42,3 +42,14 @@ model AccountSettings {
   skipUnmapped   Boolean  @default(true)
   updatedAt      DateTime @updatedAt
 }
+
+model CategoryMapping {
+  shop             String
+  sourceStoreId    Int
+  sourceCategoryId Int
+  collectionId     String?
+  profitMargin     String   @default("0")
+  updatedAt        DateTime @updatedAt
+
+  @@id([shop, sourceStoreId, sourceCategoryId])
+}
