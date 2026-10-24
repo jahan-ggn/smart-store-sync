@@ -30,7 +30,7 @@ async function main() {
   console.table(progress);
 
   console.log(
-    "Core product sync only. Images, collections, inventory and publishing are still pending.",
+    "Product and collection sync only. Images, inventory and publishing are still pending.",
   );
 }
 async function run() {

@@ -47,7 +47,37 @@ type VariantPage = {
   nodes: ExistingVariant[];
   pageInfo: { hasNextPage: boolean; endCursor: string | null };
 };
-type ExistingProduct = { id: string; title: string; variants: VariantPage };
+type CollectionPage = {
+  nodes: { id: string }[];
+  pageInfo: { hasNextPage: boolean; endCursor: string | null };
+};
+type ExistingProduct = {
+  id: string;
+  title: string;
+  variants: VariantPage;
+  collections: CollectionPage;
+};
+
+const COLLECTION_FIELDS = `
+  nodes { id }
+  pageInfo { hasNextPage endCursor }
+`;
+const MORE_COLLECTIONS = `#graphql
+  query MoreSourceCollections($id: ID!, $after: String!) {
+    product(id: $id) {
+      id
+      collections(first: 100, after: $after) { ${COLLECTION_FIELDS} }
+    }
+  }
+`;
+const CHECK_COLLECTIONS = `#graphql
+  query CheckMappingCollections($ids: [ID!]!) {
+    nodes(ids: $ids) {
+      __typename
+      ... on Collection { id title }
+    }
+  }
+`;
 
 const VARIANT_FIELDS = `
   nodes { id sku price compareAtPrice selectedOptions { name value } }
@@ -247,6 +277,42 @@ export function createProductImporter(admin: Admin, concurrency = 3) {
   if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 3)
     throw new Error("Importer concurrency must be between 1 and 3.");
   const api = createRequester(admin);
+  const checkedCollections = new Set<string>();
+  function collectionIds(product: PreparedProduct) {
+    const ids = [...new Set(product.decision.collectionIds)].sort();
+    if (
+      ids.length > 250 ||
+      ids.some((id) => !/^gid:\/\/shopify\/Collection\/[1-9]\d*$/.test(id))
+    ) {
+      throw new Error(
+        "Invalid collection mappings. Review Category Mapping and prepare a new import.",
+      );
+    }
+    return ids;
+  }
+  async function checkCollections(products: PreparedProduct[]) {
+    const unchecked = [...new Set(products.flatMap(collectionIds))].filter(
+      (id) => !checkedCollections.has(id),
+    );
+    for (let offset = 0; offset < unchecked.length; offset += 250) {
+      const ids = unchecked.slice(offset, offset + 250);
+      const result = await api.request<{
+        nodes: ({ __typename: string; id?: string } | null)[];
+      }>(CHECK_COLLECTIONS, { ids }, ids.length + 1);
+      if (
+        result.nodes.length !== ids.length ||
+        result.nodes.some(
+          (node, index) =>
+            node?.__typename !== "Collection" || node.id !== ids[index],
+        )
+      ) {
+        throw new Error(
+          "A mapped collection is unavailable. Update Category Mapping, cancel this job, and prepare a new import.",
+        );
+      }
+      ids.forEach((id) => checkedCollections.add(id));
+    }
+  }
   async function lookupGroup(products: PreparedProduct[]) {
     const variables: Record<string, unknown> = {};
     const declarations = products
@@ -255,7 +321,7 @@ export function createProductImporter(admin: Admin, concurrency = 3) {
     const fields = products
       .map((product, i) => {
         variables[`p${i}`] = sourceIdentifier(product);
-        return `p${i}: productByIdentifier(identifier: $p${i}) { id title variants(first: 10) { ${VARIANT_FIELDS} } }`;
+        return `p${i}: productByIdentifier(identifier: $p${i}) { id title variants(first: 10) { ${VARIANT_FIELDS} } collections(first: 10) { ${COLLECTION_FIELDS} } }`;
       })
       .join("\n");
     const result = await api.request<Record<string, ExistingProduct | null>>(
@@ -267,13 +333,14 @@ export function createProductImporter(admin: Admin, concurrency = 3) {
       id: string;
       title: string;
       variants: ExistingVariant[];
+      collectionIds: string[];
     }[] = [];
     for (let i = 0; i < products.length; i++) {
       const product = result[`p${i}`];
       if (product === undefined)
         throw new Error("Shopify omitted a product lookup result.");
       if (!product) {
-        existing.push({ id: "", title: "", variants: [] });
+        existing.push({ id: "", title: "", variants: [], collectionIds: [] });
         continue;
       }
       const variants = [...product.variants.nodes];
@@ -293,7 +360,30 @@ export function createProductImporter(admin: Admin, concurrency = 3) {
         if (page.pageInfo.hasNextPage && page.pageInfo.endCursor === after)
           throw new Error("Shopify repeated a variant cursor.");
       }
-      existing.push({ id: product.id, title: product.title, variants });
+      const collections = [...product.collections.nodes];
+      let collectionPage = product.collections;
+      const cursors = new Set<string>();
+      while (collectionPage.pageInfo.hasNextPage) {
+        const after = collectionPage.pageInfo.endCursor;
+        if (!after || cursors.has(after))
+          throw new Error("Invalid Shopify collection cursor.");
+        cursors.add(after);
+        const more = await api.request<{
+          product: { id: string; collections: CollectionPage } | null;
+        }>(MORE_COLLECTIONS, { id: product.id, after }, 150);
+        if (!more.product || more.product.id !== product.id)
+          throw new Error("The product disappeared while loading collections.");
+        collectionPage = more.product.collections;
+        collections.push(...collectionPage.nodes);
+      }
+      existing.push({
+        id: product.id,
+        title: product.title,
+        variants,
+        collectionIds: [
+          ...new Set(collections.map((collection) => collection.id)),
+        ].sort(),
+      });
     }
     return existing;
   }
@@ -309,6 +399,7 @@ export function createProductImporter(admin: Admin, concurrency = 3) {
     );
     if (new Set(keys).size !== keys.length)
       throw new Error("The import group contains duplicate source products.");
+    await checkCollections(products);
     const existing = await lookupGroup(products);
     const results: { sourceId: string; productId: string; title: string }[] =
       new Array(products.length);
@@ -321,6 +412,7 @@ export function createProductImporter(admin: Admin, concurrency = 3) {
         try {
           beforeWrite();
           const { product, variants, decision } = products[i];
+          const desiredCollections = collectionIds(products[i]);
           if (!decision.eligible || !variants.variants.length)
             throw new Error("The prepared product is not eligible.");
           const ids = new Map(
@@ -347,6 +439,10 @@ export function createProductImporter(admin: Admin, concurrency = 3) {
           const unchanged =
             existing[i].id &&
             existing[i].title === product.name &&
+            existing[i].collectionIds.length === desiredCollections.length &&
+            existing[i].collectionIds.every(
+              (id, index) => id === desiredCollections[index],
+            ) &&
             existing[i].variants.length === expected.length &&
             expected.every(({ variant, selected }, position) => {
               const saved = existingByOptions.get(signature(selected));
@@ -375,6 +471,7 @@ export function createProductImporter(admin: Admin, concurrency = 3) {
           }
           const input = {
             title: product.name,
+            collections: desiredCollections,
             ...(existing[i].id ? {} : { status: "DRAFT" }),
             productOptions: options.map((option, position) => ({
               name: option.name,
