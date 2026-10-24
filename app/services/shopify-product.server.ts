@@ -161,7 +161,11 @@ function createRequester(admin: Admin) {
       beforeRequest();
       requests++;
       try {
-        const response = await admin.graphql(query, { variables, tries: 1 });
+        const response = await admin.graphql(query, {
+          variables,
+          tries: 1,
+          signal: AbortSignal.timeout(60_000),
+        });
         const body = (await response.json()) as Envelope<T>;
         const cost = body.extensions?.cost;
         observe(cost, reserved);

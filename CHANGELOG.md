@@ -1,20 +1,24 @@
 # @shopify/shopify-app-template-react-router
 
 ## 2026.09.23
+
 - Update `@shopify/shopify-app-react-router` to v3 and `@shopify/shopify-app-session-storage-prisma` to v11. This picks up the new `polarisUrl` option on `AppProvider` and `shopifyApp` for choosing which polaris.js build to load.
 - Remove the `embedded` prop from `AppProvider` in `app/routes/app.tsx`, which v2 removed.
 - Remove the `/auth/login` route, which relied on `<AppProvider embedded={false}>`. The login form on the `_index` route now submits to its own `action`, which calls `shopify.login()` and shows any shop-domain error inline.
 - Require Node.js 22.12 or later (v2 dropped Node.js 20) and move the `Dockerfile` to `node:22-alpine`.
 
 ## 2026.09.03
+
 - [#280](https://github.com/Shopify/shopify-app-template-react-router/pull/280) - Pin the React Router family to 7.18.2. 7.18.3 tightened action-origin validation to compare the full origin, which made every action return `400 Bad Request` under `shopify app dev` and, in production, behind TLS-terminating proxies that forward to the app over plain HTTP (`react-router-serve` never enables Express `trust proxy`). Fixes [#279](https://github.com/Shopify/shopify-app-template-react-router/issues/279).
 - [#280](https://github.com/Shopify/shopify-app-template-react-router/pull/280) - Force `qs` to `^6.16.0` to clear [CVE-2026-82562](https://github.com/advisories/GHSA-x5fp-wj9c-mxmx) and [CVE-2026-82417](https://github.com/advisories/GHSA-4mjr-xmp4-gh2g), which reach the app transitively through `@react-router/serve` → `express@4`.
 
 ## 2026.02.09
+
 - Add declarative product metafield definition and demonstrate metafield usage in the product creation flow
 - Add declarative metaobject definition and demonstrate metaobject upsert in the product creation flow
 
 ## 2026.01.08
+
 - [#170](https://github.com/Shopify/shopify-app-template-react-router/pull/170) - Update React Router minimum version to v7.12.0
 
 ## 2025.12.11
@@ -41,7 +45,7 @@
 
 ## 2025.08.17
 
-- [#58](https://github.com/Shopify/shopify-app-template-react-router/pull/58) Update Shopify & React Router dependencies.  Use Shopify React Router in graphqlrc, not shopify-api
+- [#58](https://github.com/Shopify/shopify-app-template-react-router/pull/58) Update Shopify & React Router dependencies. Use Shopify React Router in graphqlrc, not shopify-api
 - [#57](https://github.com/Shopify/shopify-app-template-react-router/pull/57) Update Webhook API version in `shopify.app.toml` to `2025-07`
 - [#56](https://github.com/Shopify/shopify-app-template-react-router/pull/56) Remove local CLI from package.json in favor of global CLI installation
 - [#53](https://github.com/Shopify/shopify-app-template-react-router/pull/53) Add the Shopify Dev MCP to the template
@@ -84,9 +88,11 @@ Forked the [shopify-app-template repo](https://github.com/Shopify/shopify-app-te
 
 - [#904](https://github.com/Shopify/shopify-app-template-remix/pull/904) bump `@shopify/app-bridge-react` to latest
 -
+
 ## 2024.12.18
 
 - [875](https://github.com/Shopify/shopify-app-template-remix/pull/875) Add Scopes Update Webhook
+
 ## 2024.12.05
 
 - [#910](https://github.com/Shopify/shopify-app-template-remix/pull/910) Install `openssl` in Docker image to fix Prisma (see [#25817](https://github.com/prisma/prisma/issues/25817#issuecomment-2538544254))

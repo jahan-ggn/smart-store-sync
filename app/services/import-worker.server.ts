@@ -126,7 +126,7 @@ export async function runProductImport(
     let groups = 0;
     let stoppedAtLimit = false;
     let pending: PreparedProduct[] = [];
-    async function flush() {
+    const flush = async () => {
       if (!pending.length) return;
       const startedAt = performance.now();
       const requestsBefore = importer.requestCount;
@@ -158,7 +158,7 @@ export async function runProductImport(
           `Group: ${((performance.now() - startedAt) / 1000).toFixed(1)}s, ` +
           `${importer.requestCount - requestsBefore} API requests.`,
       );
-    }
+    };
     for await (const row of readSourceCsv(job.sourcePath)) {
       rowNumber++;
       if (rowNumber <= job.lastCompletedRow) continue;
