@@ -36,6 +36,7 @@ model Session {
 model AccountSettings {
   shop           String   @id
   tokenEncrypted String
+  inventoryLocationId String?
   defaultMargin  String   @default("0.00")
   minPrice       String   @default("0.00")
   maxPrice       String   @default("0.00")
@@ -76,6 +77,9 @@ model ImportJob {
   updatedAt        DateTime      @updatedAt
   lastCompletedRow Int           @default(0)
   productsSynced   Int           @default(0)
+  inventoryCursor String?
+  inventoryLocationId String?
+  inventoryProductsProcessed Int @default(0)
 
   @@index([shop, createdAt])
 }

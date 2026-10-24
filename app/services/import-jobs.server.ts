@@ -156,8 +156,21 @@ export async function cancelPreparedImport(shop: string) {
       shop,
       activeShop: shop,
       OR: [
-        { status: { in: ["preparing", "ready", "products_synced"] } },
-        { status: "running", leaseExpiresAt: { lte: new Date() } },
+        {
+          status: {
+            in: [
+              "preparing",
+              "ready",
+              "products_synced",
+              "inventory_ready",
+              "inventory_synced",
+            ],
+          },
+        },
+        {
+          status: { in: ["running", "inventory_running"] },
+          leaseExpiresAt: { lte: new Date() },
+        },
       ],
     },
     data: {

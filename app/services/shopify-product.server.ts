@@ -103,7 +103,7 @@ const UPSERT = `#graphql
   }
 `;
 
-function createRequester(admin: Admin) {
+export function createRequester(admin: Admin) {
   let available: number | undefined;
   let maximum = 0;
   let restoreRate = 0;
