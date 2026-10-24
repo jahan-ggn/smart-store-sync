@@ -53,3 +53,29 @@ model CategoryMapping {
 
   @@id([shop, sourceStoreId, sourceCategoryId])
 }
+
+model ImportJob {
+  id               String        @id @default(cuid())
+  shop             String
+  activeShop       String?       @unique
+  status           String        @default("preparing")
+  workerToken      String?
+  leaseExpiresAt   DateTime?
+  fileName         String
+  sourcePath       String?
+  fileHash         String?
+  ruleSnapshotJson String
+  rowsRead         Int           @default(0)
+  eligible         Int           @default(0)
+  skipped          Int           @default(0)
+  invalid          Int           @default(0)
+  variantCount     Int           @default(0)
+  warnings         Int           @default(0)
+  errorsJson       String        @default("[]")
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+  lastCompletedRow Int           @default(0)
+  productsSynced   Int           @default(0)
+
+  @@index([shop, createdAt])
+}
