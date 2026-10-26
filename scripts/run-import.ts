@@ -1,6 +1,7 @@
 import process from "node:process";
 import db from "../app/db.server";
 import { checkImportShop } from "../app/services/import-jobs.server";
+import { createImportAdmin } from "../app/services/import-admin.server";
 import { runProductImport } from "../app/services/import-worker.server";
 import { runInventoryImport } from "../app/services/inventory.server";
 import { runImageImport } from "../app/services/image-worker.server";
@@ -42,8 +43,7 @@ async function main() {
   ]) {
     if (!process.env[name]) throw new Error(`Set ${name} in .env first.`);
   }
-  const { unauthenticated } = await import("../app/shopify.server");
-  const { admin } = await unauthenticated.admin(shop);
+  const admin = createImportAdmin(shop);
   const finishPublishing = async () => {
     console.table(await runPublishingImport(shop, jobId, admin, all ? 0 : 1));
   };
