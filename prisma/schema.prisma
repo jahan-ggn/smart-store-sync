@@ -80,6 +80,11 @@ model ImportJob {
   inventoryCursor String?
   inventoryLocationId String?
   inventoryProductsProcessed Int @default(0)
+  lastImageRow Int @default(0)
+  imageProductsSynced Int @default(0)
+  publicationId String?
+  lastPublishedRow Int @default(0)
+  productsPublished Int @default(0)
 
   @@index([shop, createdAt])
 }
