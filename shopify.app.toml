@@ -1,6 +1,6 @@
 client_id = "38d092e2a6318ff67aa5f0ee4e0fb8bc"
 name = "Smart Store Sync"
-application_url = "https://electro-consultants-expires-investigators.trycloudflare.com"
+application_url = "https://cafe-believe-returns-listed.trycloudflare.com"
 embedded = true
 handle = "smart-store-sync-38d092e2"
 
@@ -26,4 +26,4 @@ api_version = "2027-01"
 scopes = "write_products,write_inventory,read_locations,write_files,read_publications,write_publications"
 
 [auth]
-redirect_urls = ["https://electro-consultants-expires-investigators.trycloudflare.com/auth/callback"]
+redirect_urls = ["https://cafe-believe-returns-listed.trycloudflare.com/auth/callback"]

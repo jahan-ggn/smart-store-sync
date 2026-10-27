@@ -97,8 +97,18 @@ const UPSERT = `#graphql
       product {
         id
         sourceId: metafield(namespace: "$app", key: "source_product_id") { jsonValue }
+        collections(first: 10) { ${COLLECTION_FIELDS} }
       }
       userErrors { field message code }
+    }
+  }
+`;
+
+const JOIN_COLLECTIONS = `#graphql
+  mutation RepairSourceProductCollections($id: ID!, $collections: [ID!]!) {
+    productUpdate(product: { id: $id, collectionsToJoin: $collections }) {
+      product { id collections(first: 10) { ${COLLECTION_FIELDS} } }
+      userErrors { field message }
     }
   }
 `;
@@ -278,6 +288,68 @@ export function createProductImporter(admin: Admin, concurrency = 3) {
     throw new Error("Importer concurrency must be between 1 and 3.");
   const api = createRequester(admin);
   const checkedCollections = new Set<string>();
+  async function missingCollections(
+    id: string,
+    page: CollectionPage,
+    expected: string[],
+    guard: () => void,
+  ) {
+    const found = new Set(page.nodes.map((collection) => collection.id));
+    const cursors = new Set<string>();
+    while (
+      expected.some((value) => !found.has(value)) &&
+      page.pageInfo.hasNextPage
+    ) {
+      const after = page.pageInfo.endCursor;
+      if (!after || cursors.has(after))
+        throw new Error("Invalid Shopify collection cursor.");
+      cursors.add(after);
+      const more = await api.request<{
+        product: { id: string; collections: CollectionPage } | null;
+      }>(MORE_COLLECTIONS, { id, after }, 150, guard);
+      if (!more.product || more.product.id !== id)
+        throw new Error("The product disappeared while verifying collections.");
+      page = more.product.collections;
+      page.nodes.forEach((collection) => found.add(collection.id));
+    }
+    return expected.filter((value) => !found.has(value));
+  }
+  async function ensureCollections(
+    product: { id: string; collections: CollectionPage },
+    expected: string[],
+    guard: () => void,
+  ) {
+    const missing = await missingCollections(
+      product.id,
+      product.collections,
+      expected,
+      guard,
+    );
+    if (!missing.length) return;
+    const result = await api.request<{
+      productUpdate: {
+        product: { id: string; collections: CollectionPage } | null;
+        userErrors: { message: string }[];
+      };
+    }>(JOIN_COLLECTIONS, { id: product.id, collections: missing }, 30, guard);
+    const repaired = result.productUpdate;
+    if (repaired.userErrors.length)
+      throw new Error(
+        repaired.userErrors.map((error) => error.message).join("; "),
+      );
+    if (!repaired.product || repaired.product.id !== product.id)
+      throw new Error("Shopify did not confirm the collection repair.");
+    const remaining = await missingCollections(
+      product.id,
+      repaired.product.collections,
+      expected,
+      guard,
+    );
+    if (remaining.length)
+      throw new Error(
+        `Collection assignments were not confirmed for ${product.id}: ${remaining.join(", ")}`,
+      );
+  }
   function collectionIds(product: PreparedProduct) {
     const ids = [...new Set(product.decision.collectionIds)].sort();
     if (
@@ -500,6 +572,7 @@ export function createProductImporter(admin: Admin, concurrency = 3) {
               product: {
                 id: string;
                 sourceId: { jsonValue: unknown } | null;
+                collections: CollectionPage;
               } | null;
               userErrors: {
                 field: string[] | null;
@@ -528,6 +601,11 @@ export function createProductImporter(admin: Admin, concurrency = 3) {
             (existing[i].id && saved.product.id !== existing[i].id)
           )
             throw new Error("Shopify returned an unexpected product identity.");
+          await ensureCollections(
+            saved.product,
+            desiredCollections,
+            beforeWrite,
+          );
           results[i] = {
             sourceId: keys[i],
             productId: saved.product.id,
