@@ -85,6 +85,13 @@ model ImportJob {
   publicationId String?
   lastPublishedRow Int @default(0)
   productsPublished Int @default(0)
+  publicationSkippedNoImage Int @default(0)
+  sourceDeliveryId String?
+  sourceGeneratedAt DateTime?
+  nextAttemptAt DateTime?
+  automaticFailures Int @default(0)
+
+  @@unique([shop, sourceDeliveryId])
 
   @@index([shop, createdAt])
 }

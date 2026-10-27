@@ -35,27 +35,58 @@ export async function cleanupImportHistory() {
     await db.importJob.delete({ where: { id: job.id } });
   }
 }
-export async function prepareImportJob(filePath: string, shop: string) {
+export class ImportJobConflict extends Error {}
+export type SourceDelivery = {
+  id: string;
+  generatedAt: Date;
+  storeIds: number[];
+};
+export async function prepareImportJob(
+  filePath: string,
+  shop: string,
+  delivery?: SourceDelivery,
+) {
   checkImportShop(shop);
   if (!(await stat(filePath)).isFile())
     throw new Error("The CSV path must be a file.");
   await cleanupImportHistory();
   const rules = await loadImportRules(shop);
-  const job = await db.importJob
-    .create({
-      data: {
-        shop,
-        activeShop: shop,
-        fileName: basename(filePath),
-        ruleSnapshotJson: JSON.stringify(rules.snapshot),
-      },
+  const job = await db
+    .$transaction(async (tx) => {
+      if (delivery) {
+        const latest = await tx.importJob.findFirst({
+          where: { shop, sourceGeneratedAt: { not: null } },
+          orderBy: { sourceGeneratedAt: "desc" },
+        });
+        if (
+          latest?.sourceGeneratedAt &&
+          latest.sourceGeneratedAt >= delivery.generatedAt
+        )
+          throw new ImportJobConflict(
+            "A newer or equal source delivery has already been accepted.",
+          );
+      }
+      return tx.importJob.create({
+        data: {
+          shop,
+          activeShop: shop,
+          fileName: basename(filePath),
+          ruleSnapshotJson: JSON.stringify(rules.snapshot),
+          ...(delivery
+            ? {
+                sourceDeliveryId: delivery.id,
+                sourceGeneratedAt: delivery.generatedAt,
+              }
+            : {}),
+        },
+      });
     })
     .catch((error: unknown) => {
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === "P2002"
       )
-        throw new Error(
+        throw new ImportJobConflict(
           "This shop already has an active import. Finish or cancel it first.",
         );
       throw error;
@@ -71,6 +102,7 @@ export async function prepareImportJob(filePath: string, shop: string) {
     warnings: 0,
   };
   const errors: { line?: number; error: string }[] = [];
+  const sourceStoreIds = new Set<number>();
   try {
     await mkdir(folder, { recursive: true });
     await copyFile(filePath, sourcePath);
@@ -84,6 +116,11 @@ export async function prepareImportJob(filePath: string, shop: string) {
         continue;
       }
       try {
+        if (delivery && !delivery.storeIds.includes(row.product.storeId))
+          throw new Error(
+            `CSV store ${row.product.storeId} is outside this subscription.`,
+          );
+        sourceStoreIds.add(row.product.storeId);
         const variants = normalizeVariants(row.product);
         const decision = rules.evaluate(row.product);
         counts.warnings += row.warnings.length;
@@ -116,6 +153,10 @@ export async function prepareImportJob(filePath: string, shop: string) {
           fileHash,
           status: "ready",
           errorsJson: "[]",
+          ruleSnapshotJson: JSON.stringify({
+            ...rules.snapshot,
+            sourceStoreIds: [...sourceStoreIds],
+          }),
         },
       });
       if (changed.count !== 1) throw new Error("Preparation was cancelled.");

@@ -179,12 +179,7 @@ export function createImageImporter(admin: Admin) {
     // Resolve filenames together rather than one API call per image.
     const allNames = [...entries.keys()];
     for (const name of allNames)
-      if (
-        knownFiles.has(name) &&
-        knownFiles.get(name)!.fileStatus !== "FAILED" &&
-        knownFiles.get(name)!.status !== "FAILED"
-      )
-        files.set(name, knownFiles.get(name)!);
+      if (knownFiles.has(name)) files.set(name, knownFiles.get(name)!);
     const uncached = allNames.filter((name) => !files.has(name));
     for (let offset = 0; offset < uncached.length; offset += 25) {
       const batch = uncached.slice(offset, offset + 25);
@@ -217,11 +212,50 @@ export function createImageImporter(admin: Admin) {
     const missing = allNames.filter(
       (name) =>
         !files.has(name) ||
-        files.get(name)!.fileStatus === "FAILED" ||
-        files.get(name)!.status === "FAILED",
+        (!knownFiles.has(name) &&
+          (files.get(name)!.fileStatus === "FAILED" ||
+            files.get(name)!.status === "FAILED")),
     );
-    for (let offset = 0; offset < missing.length; offset += 250) {
-      const batch = missing.slice(offset, offset + 250);
+    // Check only files that would need an upload. Cancel the GET body after
+    // headers: Shopify still downloads the actual image directly from the CDN.
+    const uploadable = new Set<string>();
+    let nextCheck = 0;
+    const checkNext = async () => {
+      while (nextCheck < missing.length) {
+        const name = missing[nextCheck++];
+        guard();
+        let failure = "Source image could not be reached.";
+        try {
+          const response = await fetch(entries.get(name)!.url, {
+            signal: AbortSignal.timeout(10_000),
+          });
+          const type = response.headers.get("content-type") ?? "";
+          const usable =
+            response.ok && !type.toLowerCase().includes("text/html");
+          failure = `Source image returned HTTP ${response.status}${type ? ` (${type})` : ""}.`;
+          await response.body?.cancel();
+          if (usable) {
+            uploadable.add(name);
+            continue;
+          }
+        } catch {
+          // Network failures affect this image, not product or inventory sync.
+        }
+        files.set(name, {
+          __typename: "MediaImage",
+          id: "",
+          fileStatus: "FAILED",
+          status: "FAILED",
+          fileErrors: [{ code: "SOURCE_UNAVAILABLE", message: failure }],
+        });
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(3, missing.length) }, checkNext),
+    );
+    const uploads = missing.filter((name) => uploadable.has(name));
+    for (let offset = 0; offset < uploads.length; offset += 250) {
+      const batch = uploads.slice(offset, offset + 250);
       const created = await request<{
         fileCreate: { files: File[]; userErrors: Errors };
       }>(
@@ -231,9 +265,9 @@ export function createImageImporter(admin: Admin) {
             filename: name,
             originalSource: entries.get(name)!.url,
             contentType: "IMAGE",
-            duplicateResolutionMode: files.has(name)
-              ? "REPLACE"
-              : "RAISE_ERROR",
+            // A failed upload can reserve a name without appearing in search.
+            // URL-hashed names let a retry replace that reservation safely.
+            duplicateResolutionMode: "REPLACE",
             alt: entries.get(name)!.title,
           })),
         },
@@ -273,10 +307,7 @@ export function createImageImporter(admin: Admin) {
           throw new Error(
             `Source image resolved to a different file type: ${name}`,
           );
-        if (file.fileStatus === "FAILED" || file.status === "FAILED")
-          throw new Error(
-            `Image processing failed for ${entries.get(name)!.url}: ${file.fileErrors.map((error) => error.message).join("; ")}`,
-          );
+        if (file.fileStatus === "FAILED" || file.status === "FAILED") continue;
         if (
           file.fileStatus !== "READY" ||
           (file.status && file.status !== "READY") ||
@@ -294,10 +325,7 @@ export function createImageImporter(admin: Admin) {
         console.log(
           `Images: waiting for ${pending.length} Shopify files to finish processing.`,
         );
-      if (attempt === 45)
-        throw new Error(
-          "Shopify is still processing images. Resume this job after processing completes.",
-        );
+      if (attempt === 45) break;
       if (attempt > 0) await delay(2000);
       for (let offset = 0; offset < pending.length; offset += 250) {
         const ids = pending.slice(offset, offset + 250);
@@ -318,13 +346,38 @@ export function createImageImporter(admin: Admin) {
           if (byId.has(file.id)) files.set(name, byId.get(file.id)!);
       }
     }
+    const ready = (name: string) => {
+      const file = files.get(name)!;
+      return (
+        file.fileStatus === "READY" &&
+        (!file.status || file.status === "READY") &&
+        Boolean(file.image?.url)
+      );
+    };
+    const desiredByProduct = names.map((list, i) => {
+      for (const name of list) {
+        const file = files.get(name)!;
+        knownFiles.set(name, file);
+        if (!ready(name))
+          console.warn(
+            `Image skipped for ${products[i].storeId}:${products[i].productId}: ` +
+              `${entries.get(name)!.url} (${file.fileStatus}; ` +
+              `${file.fileErrors.map((error) => error.message).join("; ") || "not ready"}).`,
+          );
+      }
+      // Preserve all current images if the requested main image is unavailable.
+      // A later import retries the source; existing products keep their images.
+      if (!ready(list[0])) return null;
+      return list.filter(ready).map((name) => files.get(name)!.id);
+    });
     let nextProduct = 0;
     let firstError: unknown;
     const syncNext = async () => {
       while (!firstError && nextProduct < products.length) {
         const i = nextProduct++;
         try {
-          const desired = names[i].map((name) => files.get(name)!.id);
+          const desired = desiredByProduct[i];
+          if (!desired) continue;
           if (sameIds(existing[i].mediaIds, desired)) continue;
           const saved = await request<{
             productSet: {
@@ -405,10 +458,8 @@ export function createImageImporter(admin: Admin) {
     if (
       verified.some(
         (product, i) =>
-          !sameIds(
-            product.mediaIds,
-            names[i].map((name) => files.get(name)!.id),
-          ),
+          desiredByProduct[i] !== null &&
+          !sameIds(product.mediaIds, desiredByProduct[i]!),
       )
     )
       throw new Error(

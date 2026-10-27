@@ -23,7 +23,14 @@ type Product = {
   id: string;
   status: string;
   publishedOnPublication: boolean;
-  media: { nodes: { id: string; status: string }[] };
+  media: {
+    nodes: {
+      __typename: string;
+      id: string;
+      status: string;
+      image?: { url: string } | null;
+    }[];
+  };
 };
 type UserErrors = { field: string[] | null; message: string }[];
 const LEASE_MS = 120_000;
@@ -118,7 +125,7 @@ export function createProductPublisher(admin: Admin) {
       };
       return `p${i}: productByIdentifier(identifier: $p${i}) {
         id status publishedOnPublication(publicationId: $publicationId)
-        media(first: 1) { nodes { id status } }
+        media(first: 1) { nodes { __typename id status ... on MediaImage { image { url } } } }
       }`;
     });
     const data = await api.request<Record<string, Product | null>>(
@@ -133,10 +140,6 @@ export function createProductPublisher(admin: Admin) {
         throw new Error(
           `Imported product ${product.storeId}:${product.productId} is missing. Prepare a fresh import.`,
         );
-      if (!saved.media.nodes.length || saved.media.nodes[0].status !== "READY")
-        throw new Error(
-          `Product ${saved.id} has no ready main image. Repair its images before publishing.`,
-        );
       return saved;
     });
   }
@@ -145,10 +148,20 @@ export function createProductPublisher(admin: Admin) {
     publicationId: string,
     guard: () => void,
   ) {
-    if (!products.length) return;
+    if (!products.length) return { published: 0, skippedNoImage: 0 };
     if (products.length > IMPORT_BATCH_SIZE)
       throw new Error("Publish at most 25 products per group.");
     const existing = await lookup(products, publicationId, guard);
+    const hasImage = (product: Product) =>
+      product.media.nodes.some(
+        (media) =>
+          media.__typename === "MediaImage" &&
+          media.status === "READY" &&
+          Boolean(media.image?.url),
+      );
+    const publishable = new Set(
+      existing.filter(hasImage).map((product) => product.id),
+    );
     // Separate requests let Shopify process products concurrently rather than
     // serializing 25 root mutations inside one GraphQL request.
     let next = 0;
@@ -158,7 +171,9 @@ export function createProductPublisher(admin: Admin) {
         const product = existing[next++];
         try {
           guard();
-          if (product.status !== "ACTIVE") {
+          const canPublish = publishable.has(product.id);
+          const desiredStatus = canPublish ? "ACTIVE" : "DRAFT";
+          if (product.status !== desiredStatus) {
             const saved = await api.request<{
               productUpdate: {
                 product: { id: string; status: string } | null;
@@ -173,7 +188,7 @@ export function createProductPublisher(admin: Admin) {
                   }
                 }
               `,
-              { product: { id: product.id, status: "ACTIVE" } },
+              { product: { id: product.id, status: desiredStatus } },
               12,
               guard,
             );
@@ -183,11 +198,17 @@ export function createProductPublisher(admin: Admin) {
               );
             if (
               saved.productUpdate.product?.id !== product.id ||
-              saved.productUpdate.product.status !== "ACTIVE"
+              saved.productUpdate.product.status !== desiredStatus
             )
               throw new Error(
-                `Shopify did not activate product ${product.id}.`,
+                `Shopify did not set product ${product.id} to ${desiredStatus}.`,
               );
+          }
+          if (!canPublish) {
+            console.warn(
+              `Publishing skipped for ${product.id}: no ready main image; kept as draft.`,
+            );
+            continue;
           }
           if (!product.publishedOnPublication) {
             const saved = await api.request<{
@@ -230,14 +251,21 @@ export function createProductPublisher(admin: Admin) {
     // Do not advance the CSV cursor until Shopify confirms both conditions.
     const verified = await lookup(products, publicationId, guard);
     if (
-      verified.some(
-        (product) =>
-          product.status !== "ACTIVE" || !product.publishedOnPublication,
+      verified.some((product) =>
+        publishable.has(product.id)
+          ? !hasImage(product) ||
+            product.status !== "ACTIVE" ||
+            !product.publishedOnPublication
+          : product.status !== "DRAFT",
       )
     )
       throw new Error(
-        "Shopify has not confirmed active Online Store publication for every product in this group. Resume this import.",
+        "Shopify has not confirmed publication or draft status for every product in this group. Resume this import.",
       );
+    return {
+      published: publishable.size,
+      skippedNoImage: products.length - publishable.size,
+    };
   }
   return {
     onlineStorePublication,
@@ -257,7 +285,9 @@ export async function publishingProgress(shop: string, jobId: string) {
     status: job.status,
     eligible: job.eligible,
     published: job.productsPublished,
-    remaining: job.eligible - job.productsPublished,
+    skippedNoImage: job.publicationSkippedNoImage,
+    remaining:
+      job.eligible - job.productsPublished - job.publicationSkippedNoImage,
     publicationId: job.publicationId,
     lastPublishedRow: job.lastPublishedRow,
   };
@@ -361,6 +391,7 @@ export async function runPublishingImport(
     await saveProgress({ publicationId });
     let rowNumber = 0;
     let published = job.productsPublished;
+    let skippedNoImage = job.publicationSkippedNoImage;
     let groups = 0;
     let stoppedAtLimit = false;
     let pending: SourceProduct[] = [];
@@ -368,10 +399,11 @@ export async function runPublishingImport(
       if (!pending.length) return;
       const startedAt = performance.now();
       const requestsBefore = publisher.requestCount;
+      let outcome: { published: number; skippedNoImage: number } | undefined;
       // Retry the whole group: reread Shopify state to recover partial/lost responses.
       for (let attempt = 1; attempt <= 3; attempt++) {
         try {
-          await publisher.publishGroup(pending, publicationId, guard);
+          outcome = await publisher.publishGroup(pending, publicationId, guard);
           break;
         } catch (error) {
           guard();
@@ -379,19 +411,23 @@ export async function runPublishingImport(
           await delay(1000 * 2 ** attempt);
         }
       }
-      const nextPublished = published + pending.length;
-      if (nextPublished > job.eligible)
+      if (!outcome) throw new Error("Publishing did not return a result.");
+      const nextPublished = published + outcome.published;
+      const nextSkipped = skippedNoImage + outcome.skippedNoImage;
+      if (nextPublished + nextSkipped > job.eligible)
         throw new Error("Published count exceeds the prepared product count.");
       await saveProgress({
         lastPublishedRow: rowNumber,
         productsPublished: nextPublished,
+        publicationSkippedNoImage: nextSkipped,
         errorsJson: "[]",
       });
       published = nextPublished;
+      skippedNoImage = nextSkipped;
       pending = [];
       groups++;
       console.log(
-        `Publishing: ${published}/${job.eligible} products verified on Online Store. ` +
+        `Publishing: ${published + skippedNoImage}/${job.eligible} checked; ${published} published, ${skippedNoImage} skipped without an image. ` +
           `Group: ${((performance.now() - startedAt) / 1000).toFixed(1)}s, ` +
           `${publisher.requestCount - requestsBefore} API requests.`,
       );
@@ -411,7 +447,7 @@ export async function runPublishingImport(
     }
     if (!stoppedAtLimit) {
       await flush();
-      if (published !== job.eligible)
+      if (published + skippedNoImage !== job.eligible)
         throw new Error(
           "The CSV does not match its prepared eligible product count.",
         );
@@ -419,7 +455,7 @@ export async function runPublishingImport(
     // Stop the heartbeat before the final transition releases ownership.
     clearInterval(timer);
     await heartbeat;
-    const completed = published === job.eligible;
+    const completed = published + skippedNoImage === job.eligible;
     await saveProgress({
       status: completed ? "completed" : "publishing_ready",
       ...(completed

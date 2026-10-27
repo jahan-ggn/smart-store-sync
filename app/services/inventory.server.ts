@@ -40,7 +40,7 @@ const VARIANTS = `
 `;
 const SCAN = `#graphql
   query InventoryProducts($after: String, $locationId: ID!) {
-    products(first: 10, after: $after, sortKey: ID) {
+    products(first: 25, after: $after, sortKey: ID) {
       nodes {
         id
         sourceId: metafield(namespace: "$app", key: "source_product_id") { jsonValue }

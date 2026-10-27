@@ -27,7 +27,7 @@ export async function imageProgress(shop: string, jobId: string) {
     jobId,
     status: job.status,
     eligible: job.eligible,
-    synced: job.imageProductsSynced,
+    checked: job.imageProductsSynced,
     remaining: job.eligible - job.imageProductsSynced,
     lastImageRow: job.lastImageRow,
   };
@@ -183,7 +183,7 @@ export async function runImageImport(
       pending = [];
       groups++;
       console.log(
-        `Images: ${synced}/${job.eligible} products synced. ` +
+        `Images: ${synced}/${job.eligible} products checked. ` +
           `Group: ${((performance.now() - startedAt) / 1000).toFixed(1)}s, ` +
           `${importer.requestCount - requestsBefore} API requests.`,
       );
