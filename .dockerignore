@@ -10,3 +10,10 @@ prisma/dev.sqlite
 prisma/dev.sqlite-journal
 
 var/imports/
+.shopify/
+.react-router/
+storage/
+backups/
+.deployment-seed/
+**/*.sqlite
+**/*.sqlite-*
