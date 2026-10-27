@@ -1,0 +1,49 @@
+name: smart-store-sync
+
+x-app: &app
+  image: smart-store-sync:local
+  build: .
+  env_file: .env.production
+  environment:
+    NODE_ENV: production
+    DATABASE_URL: file:/app/storage/db/production.sqlite
+    PORT: "3000"
+    HOST: 0.0.0.0
+  volumes:
+    - database:/app/storage/db
+    - imports:/app/var/imports
+  init: true
+  stop_grace_period: 2m
+
+services:
+  migrate:
+    <<: *app
+    restart: "no"
+    command:
+      - sh
+      - -c
+      - touch /app/storage/db/production.sqlite && exec ./node_modules/.bin/prisma migrate deploy
+
+  web:
+    <<: *app
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:3000:3000"
+    command: ["npm", "run", "start"]
+
+  worker:
+    <<: *app
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    command: ["node", "--import", "tsx", "scripts/import-worker.ts"]
+
+volumes:
+  database:
+    name: smart-store-sync-database
+  imports:
+    name: smart-store-sync-imports

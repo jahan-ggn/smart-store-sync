@@ -4,6 +4,11 @@ import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { mkdir, mkdtemp, open, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import db from "../db.server";
+import { createImportAdmin } from "./import-admin.server";
+import {
+  ensureAutomaticInventoryLocation,
+  InventoryLocationError,
+} from "./inventory.server";
 import {
   checkImportShop,
   ImportJobConflict,
@@ -192,15 +197,16 @@ export async function receiveSourceCsv(request: Request) {
         "The Shopify app is not connected to this shop.",
         403,
       );
-    const account = await db.accountSettings.findUnique({
-      where: { shop: delivery.shop },
-      select: { inventoryLocationId: true },
-    });
-    if (!account?.inventoryLocationId)
-      throw new IntakeError(
-        "Configure this shop's inventory location before automatic imports.",
-        422,
+    try {
+      await ensureAutomaticInventoryLocation(
+        delivery.shop,
+        createImportAdmin(delivery.shop),
       );
+    } catch (error) {
+      if (error instanceof InventoryLocationError)
+        throw new IntakeError(error.message, 422);
+      throw error;
+    }
     const duplicate = await existingDelivery(delivery);
     if (duplicate) return duplicate;
     if (await db.importJob.findUnique({ where: { activeShop: delivery.shop } }))

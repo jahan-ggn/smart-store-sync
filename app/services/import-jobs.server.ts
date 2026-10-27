@@ -20,19 +20,42 @@ export async function hashImportFile(path: string) {
   return hash.digest("hex");
 }
 export async function cleanupImportHistory() {
+  const eligible: Prisma.ImportJobWhereInput = {
+    status: { in: ["failed", "cancelled", "completed"] },
+    activeShop: null,
+    workerToken: null,
+    leaseExpiresAt: null,
+    updatedAt: { lt: new Date(Date.now() - 7 * 86400_000) },
+  };
   const old = await db.importJob.findMany({
-    where: {
-      status: { in: ["failed", "cancelled", "completed"] },
-      activeShop: null,
-      updatedAt: { lt: new Date(Date.now() - 7 * 86400_000) },
-    },
+    where: eligible,
     take: 100,
-    select: { id: true, sourcePath: true },
+    select: { id: true, updatedAt: true },
   });
   for (const job of old) {
-    if (job.sourcePath) await rm(job.sourcePath, { force: true });
-    await rm(join(storage, job.id), { recursive: true, force: true });
-    await db.importJob.delete({ where: { id: job.id } });
+    try {
+      await db.$transaction(async (tx) => {
+        // The conditional delete both rechecks the snapshot and acquires the
+        // database write lock before touching files. A competing cleaner sees
+        // zero rows; an active or changed job keeps its files.
+        const removed = await tx.importJob.deleteMany({
+          where: { AND: [eligible, { id: job.id, updatedAt: job.updatedAt }] },
+        });
+        if (!removed.count) return;
+        if (!/^[a-zA-Z0-9_-]+$/.test(job.id))
+          throw new Error("Invalid retained import directory.");
+        // Only app-managed copies are ours to remove, never an arbitrary
+        // sourcePath. A filesystem failure rolls the database deletion back.
+        await rm(join(storage, job.id), { recursive: true, force: true });
+      });
+    } catch (error) {
+      // History retention is maintenance: keep processing imports and retry
+      // this record on the next cleanup pass if disk access or locking fails.
+      console.error(
+        `Import history cleanup deferred for ${job.id}:`,
+        error instanceof Error ? error.message : "Cleanup failed.",
+      );
+    }
   }
 }
 export class ImportJobConflict extends Error {}
@@ -155,7 +178,9 @@ export async function prepareImportJob(
           errorsJson: "[]",
           ruleSnapshotJson: JSON.stringify({
             ...rules.snapshot,
-            sourceStoreIds: [...sourceStoreIds],
+            sourceStoreIds: delivery
+              ? [...delivery.storeIds]
+              : [...sourceStoreIds],
           }),
         },
       });

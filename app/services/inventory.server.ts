@@ -26,6 +26,8 @@ type Product = {
 };
 type UserError = { field: string[] | null; message: string; code?: string };
 
+export class InventoryLocationError extends Error {}
+
 const VARIANTS = `
   nodes {
     id sku inventoryPolicy
@@ -120,9 +122,10 @@ export async function loadInventoryFeed(job: ImportJob) {
   const snapshot = JSON.parse(job.ruleSnapshotJson) as {
     settings: Parameters<typeof createImportRules>[0];
     mappings: Parameters<typeof createImportRules>[1];
+    sourceStoreIds?: number[];
   };
   const rules = createImportRules(snapshot.settings, snapshot.mappings);
-  const stores = new Set<number>();
+  const stores = new Set<number>(snapshot.sourceStoreIds ?? []);
   const eligible = new Map<string, Set<string>>();
   let rows = 0;
   for await (const row of readSourceCsv(job.sourcePath)) {
@@ -165,16 +168,46 @@ async function chooseLocation(request: Request, supplied?: string) {
   } while (after);
   if (supplied) {
     if (!locations.some((location) => location.id === supplied))
-      throw new Error(
+      throw new InventoryLocationError(
         "The selected location is unavailable or does not fulfill online orders.",
       );
     return supplied;
   }
   if (locations.length !== 1)
-    throw new Error(
-      `Choose this shop's inventory location with --location <ID>:\n${locations.map((location) => `${location.name}: ${location.id}`).join("\n") || "No active online fulfillment locations found."}`,
+    throw new InventoryLocationError(
+      "Smart Store Sync requires one active location that fulfills online orders.",
     );
   return locations[0].id;
+}
+
+// Discover the single eligible location on the first automatic delivery.
+// Keep the saved choice on subsequent deliveries and during concurrent requests.
+export async function ensureAutomaticInventoryLocation(
+  shop: string,
+  admin: Admin,
+) {
+  checkImportShop(shop);
+  const account = await db.accountSettings.findUnique({
+    where: { shop },
+    select: { inventoryLocationId: true },
+  });
+  if (!account)
+    throw new InventoryLocationError("Save Account & Plan settings first.");
+  if (account.inventoryLocationId) return account.inventoryLocationId;
+
+  const api = createRequester(admin);
+  const locationId = await chooseLocation(api.request);
+  await db.accountSettings.updateMany({
+    where: { shop, inventoryLocationId: null },
+    data: { inventoryLocationId: locationId },
+  });
+  const saved = await db.accountSettings.findUniqueOrThrow({
+    where: { shop },
+    select: { inventoryLocationId: true },
+  });
+  if (!saved.inventoryLocationId)
+    throw new Error("Unable to save the automatic inventory location.");
+  return saved.inventoryLocationId;
 }
 
 export async function inventoryProgress(shop: string, jobId: string) {

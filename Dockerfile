@@ -9,10 +9,17 @@ ENV NODE_ENV=production
 
 COPY package.json package-lock.json* ./
 
-RUN npm ci --omit=dev && npm cache clean --force
+RUN npm ci --include=dev
 
 COPY . .
 
-RUN npm run build
+RUN DATABASE_URL=file:/tmp/build.sqlite npx prisma generate \
+    && npm run build \
+    && npm prune --omit=dev \
+    && npm cache clean --force \
+    && mkdir -p /app/storage/db /app/var/imports \
+    && chown -R node:node /app/storage /app/var
 
-CMD ["npm", "run", "docker-start"]
+USER node
+
+CMD ["npm", "run", "start"]
