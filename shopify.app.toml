@@ -1,25 +1,43 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
 client_id = "38d092e2a6318ff67aa5f0ee4e0fb8bc"
-application_url = "https://example.com"
+name = "Smart Store Sync"
+application_url = "https://pay-algorithm-yarn-gas.trycloudflare.com"
 embedded = true
-name = "cartpe-store-sync"
+handle = "smart-store-sync-38d092e2"
+
+[build]
+automatically_update_urls_on_dev = true
+
+[webhooks]
+api_version = "2027-01"
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app/scopes_update"
+  topics = [ "app/scopes_update" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app/uninstalled"
+  topics = [ "app/uninstalled" ]
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
 scopes = "write_products,write_metaobjects,write_metaobject_definitions,write_inventory,read_locations,write_files,read_publications,write_publications"
 
+[auth]
+redirect_urls = ["https://pay-algorithm-yarn-gas.trycloudflare.com/auth/callback"]
+
 [product.metafields.app.demo_info]
 type = "single_line_text_field"
-name = "Demo Source Info"
-description = "Tracks products created by the Shopify app template for development"
+name = "Smart Store Sync source info"
+description = "Source information managed by Smart Store Sync"
 
   [product.metafields.app.demo_info.access]
   admin = "merchant_read_write"
 
 [metaobjects.app.example]
-name = "Example"
-description = "An example metaobject definition created by this template"
+name = "Smart Store Sync record"
+description = "Structured record managed by Smart Store Sync"
 
   [metaobjects.app.example.access]
   admin = "merchant_read_write"
@@ -32,21 +50,3 @@ required = true
 [metaobjects.app.example.fields.description]
 name = "Description"
 type = "multi_line_text_field"
-
-[webhooks]
-api_version = "2027-01"
-
-  [[webhooks.subscriptions]]
-  uri = "/webhooks/app/uninstalled"
-  topics = [ "app/uninstalled" ]
-
-  [[webhooks.subscriptions]]
-  uri = "/webhooks/app/scopes_update"
-  topics = [ "app/scopes_update" ]
-
-[auth]
-redirect_urls = [ "https://example.com/api/auth" ]
-
-[build]
-include_config_on_deploy = true
-automatically_update_urls_on_dev = true

@@ -30,34 +30,48 @@ export default function App() {
   return (
     <div className={styles.index}>
       <div className={styles.content}>
-        <h1 className={styles.heading}>A short heading about [your app]</h1>
+        <h1 className={styles.heading}>Smart Store Sync</h1>
         <p className={styles.text}>
-          A tagline about [your app] that describes your value proposition.
+          Keep products, prices, stock and images in sync with your source
+          stores.
         </p>
         {showForm && (
           <Form className={styles.form} method="post">
             <label className={styles.label}>
               <span>Shop domain</span>
-              <input className={styles.input} type="text" name="shop" />
-              <span>{errors?.shop ?? "e.g: my-shop-domain.myshopify.com"}</span>
+              <input
+                className={styles.input}
+                type="text"
+                name="shop"
+                placeholder="your-store.myshopify.com"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                required
+                aria-invalid={Boolean(errors?.shop)}
+                aria-describedby="shop-domain-help"
+              />
+              <span id="shop-domain-help">
+                {errors?.shop ?? "Enter your myshopify.com domain."}
+              </span>
             </label>
             <button className={styles.button} type="submit">
-              Log in
+              Open Smart Store Sync
             </button>
           </Form>
         )}
         <ul className={styles.list}>
           <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
+            <strong>Your source stores.</strong> Connect your subscription and
+            select the stores you want to sync.
           </li>
           <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
+            <strong>Your pricing rules.</strong> Map source categories to
+            Shopify collections and configure margins and import filters.
           </li>
           <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
+            <strong>Automatic catalog updates.</strong> Sync products, inventory
+            and images. Products without a ready main image stay as drafts.
           </li>
         </ul>
       </div>

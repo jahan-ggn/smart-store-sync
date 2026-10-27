@@ -1,5 +1,5 @@
 {
-  "name": "cartpe-store-sync",
+  "name": "smart-store-sync",
   "private": true,
   "scripts": {
     "build": "react-router build",

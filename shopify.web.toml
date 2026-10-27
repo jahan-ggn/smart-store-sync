@@ -1,4 +1,4 @@
-name = "React Router"
+name = "Smart Store Sync"
 roles = ["frontend", "backend"]
 webhooks_path = "/webhooks/app/uninstalled"
 

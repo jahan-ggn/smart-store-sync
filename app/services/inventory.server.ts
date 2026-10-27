@@ -455,7 +455,7 @@ export async function runInventoryImport(
                 input: {
                   name: "available",
                   reason: "correction",
-                  referenceDocumentUri: `gid://cartpe-store-sync/ImportJob/${jobId}`,
+                  referenceDocumentUri: `gid://smart-store-sync/ImportJob/${jobId}`,
                   quantities: changes.slice(offset, offset + 250),
                 },
               },
