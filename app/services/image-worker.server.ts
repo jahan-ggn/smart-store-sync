@@ -114,42 +114,6 @@ export async function runImageImport(
     const snapshot = JSON.parse(job.ruleSnapshotJson) as Snapshot;
     const rules = createImportRules(snapshot.settings, snapshot.mappings);
     const importer = createImageImporter(admin);
-    // Queue the full remaining catalog first so Shopify can process uploads in parallel.
-    // Filenames make this pass restartable without per-image database records.
-    if (maxGroups === 0) {
-      let row = 0;
-      let queued = 0;
-      let uploads: SourceProduct[] = [];
-      const submit = async () => {
-        if (!uploads.length) return;
-        for (let attempt = 1; attempt <= 3; attempt++) {
-          try {
-            await importer.prepareGroup(uploads, () => {
-              if (heartbeatError) throw heartbeatError;
-            });
-            break;
-          } catch (error) {
-            if (heartbeatError) throw heartbeatError;
-            if (attempt === 3) throw error;
-            await delay(1000 * 2 ** attempt);
-          }
-        }
-        queued += uploads.length;
-        uploads = [];
-        console.log(
-          `Image files resolved: ${queued}/${job.eligible - job.imageProductsSynced} remaining products. Existing files reused; missing files submitted for upload.`,
-        );
-      };
-      for await (const result of readSourceCsv(job.sourcePath)) {
-        row++;
-        if (row <= job.lastImageRow) continue;
-        if (!result.ok) throw new Error(`CSV row ${row}: ${result.error}`);
-        if (rules.evaluate(result.product).eligible)
-          uploads.push(result.product);
-        if (uploads.length === 250) await submit();
-      }
-      await submit();
-    }
     let rowNumber = 0;
     let synced = job.imageProductsSynced;
     let groups = 0;
@@ -188,14 +152,52 @@ export async function runImageImport(
           `${importer.requestCount - requestsBefore} API requests.`,
       );
     };
-    for await (const row of readSourceCsv(job.sourcePath)) {
-      rowNumber++;
-      if (rowNumber <= job.lastImageRow) continue;
-      if (!row.ok) throw new Error(`CSV row ${rowNumber}: ${row.error}`);
-      const decision = rules.evaluate(row.product);
-      if (decision.eligible) pending.push(row.product);
-      if (pending.length === IMPORT_BATCH_SIZE) {
+    // Prepare one bounded window ahead, then checkpoint each group of 25.
+    // Retain each product's CSV row so a restart resumes at the right place.
+    let window: { product: SourceProduct; row: number }[] = [];
+    const flushWindow = async () => {
+      if (!window.length) return;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          await importer.prepareGroup(
+            window.map((entry) => entry.product),
+            () => {
+              if (heartbeatError) throw heartbeatError;
+            },
+          );
+          break;
+        } catch (error) {
+          if (heartbeatError) throw heartbeatError;
+          if (attempt === 3) throw error;
+          await delay(1000 * 2 ** attempt);
+        }
+      }
+      console.log(
+        `Image preparation: ${window.length} products checked ahead.`,
+      );
+      for (
+        let offset = 0;
+        offset < window.length;
+        offset += IMPORT_BATCH_SIZE
+      ) {
+        const batch = window.slice(offset, offset + IMPORT_BATCH_SIZE);
+        pending = batch.map((entry) => entry.product);
+        rowNumber = batch[batch.length - 1].row;
         await flush();
+      }
+      window = [];
+    };
+    const windowSize = () =>
+      Math.min(250, maxGroups ? (maxGroups - groups) * IMPORT_BATCH_SIZE : 250);
+    let scannedRow = 0;
+    for await (const row of readSourceCsv(job.sourcePath)) {
+      scannedRow++;
+      if (scannedRow <= job.lastImageRow) continue;
+      if (!row.ok) throw new Error(`CSV row ${scannedRow}: ${row.error}`);
+      if (rules.evaluate(row.product).eligible)
+        window.push({ product: row.product, row: scannedRow });
+      if (window.length === windowSize()) {
+        await flushWindow();
         if (maxGroups && groups >= maxGroups) {
           stoppedAtLimit = true;
           break;
@@ -203,7 +205,7 @@ export async function runImageImport(
       }
     }
     if (!stoppedAtLimit) {
-      await flush();
+      await flushWindow();
       if (synced !== job.eligible)
         throw new Error(
           "The CSV does not match its prepared eligible product count.",

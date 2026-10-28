@@ -106,7 +106,8 @@ export async function runNextAutomaticImport() {
         "The subscribed source stores changed. Send a fresh CSV for the current selection.",
         403,
       );
-    console.table(await runImportStages(job.shop, job.id));
+    // Prepare up to 250 image products, with checkpoints every 25, then yield.
+    console.table(await runImportStages(job.shop, job.id, false, undefined, 10));
     await db.importJob.updateMany({
       where: { id: job.id, workerToken: null },
       data: { automaticFailures: 0, nextAttemptAt: null },

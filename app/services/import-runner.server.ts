@@ -13,6 +13,7 @@ export async function runImportStages(
   jobId: string,
   all = false,
   locationId?: string,
+  imageGroupLimit = 1,
 ) {
   checkImportShop(shop);
   const job = await db.importJob.findFirstOrThrow({
@@ -31,7 +32,12 @@ export async function runImportStages(
   const admin = createImportAdmin(shop);
   const publish = () => runPublishingImport(shop, jobId, admin, all ? 0 : 1);
   const images = async () => {
-    const progress = await runImageImport(shop, jobId, admin, all ? 0 : 1);
+    const progress = await runImageImport(
+      shop,
+      jobId,
+      admin,
+      all ? 0 : imageGroupLimit,
+    );
     return all && progress.status === "images_synced" ? publish() : progress;
   };
   const inventory = async () => {
