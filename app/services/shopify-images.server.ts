@@ -98,6 +98,7 @@ function sameIds(a: string[], b: string[]) {
 export function createImageImporter(admin: Admin) {
   const api = createRequester(admin);
   const knownFiles = new Map<string, File>();
+  const downloadRetries = new Map<string, number>();
   const request: typeof api.request = (
     query,
     variables,
@@ -244,7 +245,8 @@ export function createImageImporter(admin: Admin) {
             await response.body?.cancel().catch(() => undefined);
           } catch (error) {
             retryable = true;
-            const detail = error instanceof Error ? error.message : "Unknown network error";
+            const detail =
+              error instanceof Error ? error.message : "Unknown network error";
             const cause = error instanceof Error ? error.cause : undefined;
             const code =
               cause && typeof cause === "object" && "code" in cause
@@ -316,53 +318,105 @@ export function createImageImporter(admin: Admin) {
     if (!prepared) return;
     const { entries, names, files, allNames } = prepared;
     const existing = await lookup(products, guard);
-    // Shopify processes uploads asynchronously. Check all files together.
-    for (let attempt = 0; attempt < 46; attempt++) {
-      guard();
-      const pending: string[] = [];
-      for (const name of allNames) {
-        const file = files.get(name)!;
-        if (file.__typename !== "MediaImage")
-          throw new Error(
-            `Source image resolved to a different file type: ${name}`,
+    const waitForFiles = async () => {
+      for (let attempt = 0; attempt < 46; attempt++) {
+        guard();
+        const pending: string[] = [];
+        for (const name of allNames) {
+          const file = files.get(name)!;
+          if (file.__typename !== "MediaImage")
+            throw new Error(
+              `Source image resolved to a different file type: ${name}`,
+            );
+          if (file.fileStatus === "FAILED" || file.status === "FAILED")
+            continue;
+          if (
+            file.fileStatus !== "READY" ||
+            (file.status && file.status !== "READY") ||
+            !file.image?.url
+          )
+            pending.push(file.id);
+          else {
+            // Track processing by Shopify file ID. The delivery URL is not a
+            // reliable way to verify the original upload filename.
+            knownFiles.set(name, file);
+          }
+        }
+        if (!pending.length) break;
+        if (attempt % 5 === 0)
+          console.log(
+            `Images: waiting for ${pending.length} Shopify files to finish processing.`,
           );
-        if (file.fileStatus === "FAILED" || file.status === "FAILED") continue;
-        if (
-          file.fileStatus !== "READY" ||
-          (file.status && file.status !== "READY") ||
-          !file.image?.url
-        )
-          pending.push(file.id);
-        else {
-          // Track processing by Shopify file ID. The delivery URL is not a
-          // reliable way to verify the original upload filename.
-          knownFiles.set(name, file);
+        if (attempt === 45) break;
+        if (attempt > 0) await delay(2000);
+        for (let offset = 0; offset < pending.length; offset += 250) {
+          const ids = pending.slice(offset, offset + 250);
+          const checked = await request<{ nodes: (File | null)[] }>(
+            CHECK,
+            { ids },
+            ids.length * 3 + 1,
+            guard,
+          );
+          const byId = new Map(
+            checked.nodes
+              .filter((file): file is File => Boolean(file))
+              .map((file) => [file.id, file]),
+          );
+          if (ids.some((id) => !byId.has(id)))
+            throw new Error(
+              "A source image file disappeared during processing.",
+            );
+          for (const [name, file] of files)
+            if (byId.has(file.id)) files.set(name, byId.get(file.id)!);
         }
       }
-      if (!pending.length) break;
-      if (attempt % 5 === 0)
-        console.log(
-          `Images: waiting for ${pending.length} Shopify files to finish processing.`,
+    };
+    // Retry only Shopify's explicit download failures, never invalid image
+    // formats/sizes or files that are still processing. Keep the filename stable.
+    for (;;) {
+      await waitForFiles();
+      const retryNames = allNames.filter((name) => {
+        const file = files.get(name)!;
+        return (
+          Boolean(file.id) &&
+          (file.fileStatus === "FAILED" || file.status === "FAILED") &&
+          file.fileErrors.some(
+            (error) => error.code === "IMAGE_DOWNLOAD_FAILURE",
+          ) &&
+          (downloadRetries.get(name) ?? 0) < 2
         );
-      if (attempt === 45) break;
-      if (attempt > 0) await delay(2000);
-      for (let offset = 0; offset < pending.length; offset += 250) {
-        const ids = pending.slice(offset, offset + 250);
-        const checked = await request<{ nodes: (File | null)[] }>(
-          CHECK,
-          { ids },
-          ids.length * 3 + 1,
-          guard,
-        );
-        const byId = new Map(
-          checked.nodes
-            .filter((file): file is File => Boolean(file))
-            .map((file) => [file.id, file]),
-        );
-        if (ids.some((id) => !byId.has(id)))
-          throw new Error("A source image file disappeared during processing.");
-        for (const [name, file] of files)
-          if (byId.has(file.id)) files.set(name, byId.get(file.id)!);
+      });
+      if (!retryNames.length) break;
+      guard();
+      const retrySet = new Set(retryNames);
+      const retryProducts = products
+        .map((product) => ({
+          ...product,
+          imageUrls: product.imageUrls.filter((url) =>
+            retrySet.has(sourceImageFilename(url)),
+          ),
+        }))
+        .filter((product) => product.imageUrls.length);
+      const nextAttempt = Math.max(
+        ...retryNames.map((name) => (downloadRetries.get(name) ?? 0) + 1),
+      );
+      await delay(2000 * nextAttempt);
+      guard();
+      for (const name of retryNames) {
+        downloadRetries.set(name, (downloadRetries.get(name) ?? 0) + 1);
+        knownFiles.delete(name);
+      }
+      console.log(
+        `Images: retrying ${retryNames.length} Shopify download failures.`,
+      );
+      const retried = await prepareGroup(retryProducts, guard);
+      if (!retried)
+        throw new Error("No images were prepared for download recovery.");
+      for (const name of retryNames) {
+        const replacement = retried.files.get(name);
+        if (!replacement)
+          throw new Error("Shopify image retry was not confirmed.");
+        files.set(name, replacement);
       }
     }
     const ready = (name: string) => {
