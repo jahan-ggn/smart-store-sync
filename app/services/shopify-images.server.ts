@@ -223,23 +223,42 @@ export function createImageImporter(admin: Admin) {
     const checkNext = async () => {
       while (nextCheck < missing.length) {
         const name = missing[nextCheck++];
-        guard();
         let failure = "Source image could not be reached.";
-        try {
-          const response = await fetch(entries.get(name)!.url, {
-            signal: AbortSignal.timeout(10_000),
-          });
-          const type = response.headers.get("content-type") ?? "";
-          const usable =
-            response.ok && !type.toLowerCase().includes("text/html");
-          failure = `Source image returned HTTP ${response.status}${type ? ` (${type})` : ""}.`;
-          await response.body?.cancel();
-          if (usable) {
-            uploadable.add(name);
-            continue;
+        let usable = false;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          // Ownership errors must stop the worker, never become image skips.
+          guard();
+          let retryable = false;
+          try {
+            const response = await fetch(entries.get(name)!.url, {
+              signal: AbortSignal.timeout(30_000),
+            });
+            const type = response.headers.get("content-type") ?? "";
+            usable = response.ok && !type.toLowerCase().includes("text/html");
+            failure = `Source image returned HTTP ${response.status}${type ? ` (${type})` : ""}.`;
+            retryable =
+              response.status === 408 ||
+              response.status === 429 ||
+              response.status >= 500;
+            // A body cancellation error does not invalidate successful headers.
+            await response.body?.cancel().catch(() => undefined);
+          } catch (error) {
+            retryable = true;
+            const detail = error instanceof Error ? error.message : "Unknown network error";
+            const cause = error instanceof Error ? error.cause : undefined;
+            const code =
+              cause && typeof cause === "object" && "code" in cause
+                ? String(cause.code)
+                : "";
+            failure = `Source image could not be reached: ${detail}${code ? ` (${code})` : ""}.`;
           }
-        } catch {
-          // Network failures affect this image, not product or inventory sync.
+          guard();
+          if (usable || !retryable) break;
+          if (attempt < 2) await delay(1000 * (attempt + 1));
+        }
+        if (usable) {
+          uploadable.add(name);
+          continue;
         }
         files.set(name, {
           __typename: "MediaImage",
