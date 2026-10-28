@@ -139,7 +139,15 @@ export async function loadInventoryFeed(job: ImportJob) {
         new Set(variants.variants.map((variant) => variant.sku)),
       );
   }
-  if (!rows || rows !== job.rowsRead || eligible.size !== job.eligible)
+  const signedEmptySnapshot =
+    Boolean(job.sourceDeliveryId && job.sourceGeneratedAt) &&
+    stores.size > 0 &&
+    [...stores].every((id) => Number.isSafeInteger(id) && id > 0);
+  if (
+    (!rows && !signedEmptySnapshot) ||
+    rows !== job.rowsRead ||
+    eligible.size !== job.eligible
+  )
     throw new Error("The retained CSV does not match the prepared import.");
   return { stores, eligible };
 }

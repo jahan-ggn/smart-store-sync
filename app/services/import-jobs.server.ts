@@ -162,7 +162,10 @@ export async function prepareImportJob(
           });
       }
     }
-    if (!counts.rowsRead) throw new Error("The CSV contains no product rows.");
+    // Only authenticated source intake supplies delivery metadata and its
+    // verified subscribed stores. Manual header-only imports remain rejected.
+    if (!counts.rowsRead && !delivery?.storeIds.length)
+      throw new Error("The CSV contains no product rows.");
     if (counts.invalid)
       throw new Error(
         "The CSV contains invalid products. Resolve them before importing.",
