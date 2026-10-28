@@ -70,7 +70,10 @@
   ],
   "overrides": {
     "p-map": "^4.0.0",
-    "qs": "^6.16.0"
+    "qs": "^6.16.0",
+    "@prisma/config": {
+      "deepmerge-ts": "8.0.0"
+    }
   },
   "resolutions": {
     "qs": "^6.16.0"
