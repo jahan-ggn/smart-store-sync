@@ -92,6 +92,11 @@ const LOCATIONS = `#graphql
     }
   }
 `;
+const PRIMARY_LOCATION = `#graphql
+  query InventoryPrimaryLocation {
+    location { id name isActive fulfillsOnlineOrders }
+  }
+`;
 function assertNoErrors(errors: UserError[]) {
   if (errors.length)
     throw new Error(
@@ -152,6 +157,22 @@ export async function loadInventoryFeed(job: ImportJob) {
   return { stores, eligible };
 }
 async function chooseLocation(request: Request, supplied?: string) {
+  if (!supplied) {
+    // With no ID, Shopify returns the shop's configured primary location.
+    const { location } = await request<{
+      location: {
+        id: string;
+        name: string;
+        isActive: boolean;
+        fulfillsOnlineOrders: boolean;
+      } | null;
+    }>(PRIMARY_LOCATION, {}, 10);
+    if (!location?.isActive || !location.fulfillsOnlineOrders)
+      throw new InventoryLocationError(
+        "The shop's primary location is unavailable or does not fulfill online orders. Update the default location in Shopify Settings > Locations.",
+      );
+    return location.id;
+  }
   const locations: {
     id: string;
     name: string;
@@ -174,21 +195,14 @@ async function chooseLocation(request: Request, supplied?: string) {
       throw new Error("Invalid Shopify location cursor.");
     seen.add(after);
   } while (after);
-  if (supplied) {
-    if (!locations.some((location) => location.id === supplied))
-      throw new InventoryLocationError(
-        "The selected location is unavailable or does not fulfill online orders.",
-      );
-    return supplied;
-  }
-  if (locations.length !== 1)
+  if (!locations.some((location) => location.id === supplied))
     throw new InventoryLocationError(
-      "Smart Store Sync requires one active location that fulfills online orders.",
+      "The selected location is unavailable or does not fulfill online orders.",
     );
-  return locations[0].id;
+  return supplied;
 }
 
-// Discover the single eligible location on the first automatic delivery.
+// Discover Shopify's primary location on the first automatic delivery.
 // Keep the saved choice on subsequent deliveries and during concurrent requests.
 export async function ensureAutomaticInventoryLocation(
   shop: string,
