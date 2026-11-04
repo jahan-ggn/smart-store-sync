@@ -1,8 +1,5 @@
-import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { redirect, Form, useActionData, useLoaderData } from "react-router";
-
-import { login } from "../../shopify.server";
-import { loginErrorMessage } from "./error.server";
+import type { LoaderFunctionArgs } from "react-router";
+import { redirect } from "react-router";
 
 import styles from "./styles.module.css";
 
@@ -13,20 +10,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     throw redirect(`/app?${url.searchParams.toString()}`);
   }
 
-  return { showForm: Boolean(login) };
-};
-
-export const action = async ({ request }: ActionFunctionArgs) => {
-  const errors = loginErrorMessage(await login(request));
-
-  return { errors };
+  return null;
 };
 
 export default function App() {
-  const { showForm } = useLoaderData<typeof loader>();
-  const actionData = useActionData<typeof action>();
-  const errors = actionData?.errors;
-
   return (
     <div className={styles.index}>
       <div className={styles.shell}>
@@ -89,49 +76,28 @@ export default function App() {
 
             <div className={styles.connection}>
               <span className={styles.cardEyebrow}>YOUR WORKSPACE</span>
-              <h2>Open your store</h2>
+              <h2>Open from Shopify</h2>
               <p className={styles.cardDescription}>
-                Connect to Smart Store Sync using your Shopify store domain.
-              </p>
-              {showForm ? (
-                <Form className={styles.form} method="post">
-                  <label className={styles.label} htmlFor="shop-domain">
-                    Shop domain
-                  </label>
-                  <input
-                    id="shop-domain"
-                    className={styles.input}
-                    type="text"
-                    name="shop"
-                    placeholder="your-store.myshopify.com"
-                    autoCapitalize="none"
-                    autoCorrect="off"
-                    spellCheck={false}
-                    required
-                    aria-invalid={Boolean(errors?.shop)}
-                    aria-describedby="shop-domain-help"
-                  />
-                  <p
-                    id="shop-domain-help"
-                    className={errors?.shop ? styles.error : styles.help}
-                    role={errors?.shop ? "alert" : undefined}
-                  >
-                    {errors?.shop ??
-                      "Use your .myshopify.com domain, without https://."}
-                  </p>
-                  <button className={styles.button} type="submit">
-                    Open Smart Store Sync <span aria-hidden="true">→</span>
-                  </button>
-                </Form>
-              ) : (
-                <p className={styles.help}>
-                  Open Smart Store Sync from the Apps section of your Shopify
-                  admin.
-                </p>
-              )}
-              <p className={styles.cardFootnote}>
-                Already installed? You can also open the app directly from
+                Already installed? Access Smart Store Sync directly from your
                 Shopify admin.
+              </p>
+              <div className={styles.form}>
+                <ol className={styles.help}>
+                  <li>Sign in to Shopify and choose your store.</li>
+                  <li>Open Apps in your Shopify admin.</li>
+                  <li>Select Smart Store Sync.</li>
+                </ol>
+                <a
+                  className={styles.button}
+                  style={{ textDecoration: "none" }}
+                  href="https://admin.shopify.com/"
+                >
+                  Go to Shopify admin <span aria-hidden="true">→</span>
+                </a>
+              </div>
+              <p className={styles.cardFootnote}>
+                Need help getting started?{" "}
+                <a href="mailto:info@kodyt.com">Contact our support team.</a>
               </p>
             </div>
           </section>

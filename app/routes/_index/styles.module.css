@@ -212,7 +212,7 @@
 .input[aria-invalid="true"] {
   border-color: #a32222;
 }
-.button {
+.index .button {
   display: flex;
   align-items: center;
   justify-content: space-between;
