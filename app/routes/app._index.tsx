@@ -15,11 +15,18 @@ import {
   saveAccount,
   SourceProvisioningError,
 } from "../services/account.server";
+import process from "node:process";
+import {
+  syncShopifyBilling,
+  type BillingState,
+} from "../services/billing.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { session, admin } = await authenticate.admin(request);
 
   let connectionError: string | null = null;
+  let billing: BillingState | null = null;
+  let billingError: string | null = null;
 
   try {
     await ensureSourceAccount(session.shop);
@@ -30,10 +37,26 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         : "Unable to connect your source account. Please try again.";
   }
 
+  if (!connectionError) {
+    try {
+      billing = await syncShopifyBilling(session.shop, admin);
+    } catch {
+      billingError = "Unable to refresh your billing status. Please try again.";
+    }
+  }
+
+  const handle = process.env.SHOPIFY_APP_HANDLE ?? "";
+  const planUrl = /^[a-z0-9][a-z0-9-]*$/.test(handle)
+    ? `https://admin.shopify.com/store/${session.shop.replace(/\.myshopify\.com$/, "")}/charges/${handle}/pricing_plans`
+    : null;
+
   return {
     shop: session.shop,
     account: await loadAccount(session.shop),
     connectionError,
+    billing,
+    billingError,
+    planUrl,
   };
 };
 
@@ -72,7 +95,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function AccountAndPlan() {
-  const { shop, account, connectionError } = useLoaderData<typeof loader>();
+  const { shop, account, connectionError, billing, billingError, planUrl } =
+    useLoaderData<typeof loader>();
   const revalidator = useRevalidator();
   const fetcher = useFetcher<typeof action>();
 
@@ -146,6 +170,70 @@ export default function AccountAndPlan() {
 
           <s-section heading="Shopify connection">
             <s-paragraph>Connected store: {shop}</s-paragraph>
+          </s-section>
+
+          <s-section heading="Shopify plan">
+            <s-stack direction="block" gap="base">
+              <s-paragraph>
+                Standard: $25 USD per month, with a 3-day trial for eligible
+                stores.
+              </s-paragraph>
+
+              {billingError ? (
+                <s-banner tone="warning" heading="Billing status unavailable">
+                  <s-paragraph>{billingError}</s-paragraph>
+                </s-banner>
+              ) : billing ? (
+                <>
+                  <s-paragraph>
+                    {billing.status === "trial"
+                      ? "Trial approved"
+                      : billing.status === "active"
+                        ? "Subscription active"
+                        : "No approved subscription"}
+                  </s-paragraph>
+
+                  {billing.status !== "inactive" && billing.expiresAt && (
+                    <s-paragraph>
+                      Approved until:{" "}
+                      {new Date(billing.expiresAt).toUTCString()}
+                    </s-paragraph>
+                  )}
+
+                  {billing.cancelAtEndOfCycle && (
+                    <s-paragraph>
+                      Cancellation is scheduled at the end of the approved
+                      period.
+                    </s-paragraph>
+                  )}
+                </>
+              ) : (
+                <s-paragraph>
+                  Connect your source account to check billing.
+                </s-paragraph>
+              )}
+
+              {planUrl ? (
+                <s-button href={planUrl} target="_top" variant="primary">
+                  {billing?.status === "inactive"
+                    ? "Choose Shopify plan"
+                    : "Manage Shopify plan"}
+                </s-button>
+              ) : (
+                <s-paragraph>
+                  Plan management is temporarily unavailable.
+                </s-paragraph>
+              )}
+
+              <s-button
+                type="button"
+                disabled={busy || revalidator.state !== "idle"}
+                loading={revalidator.state !== "idle"}
+                onClick={() => void revalidator.revalidate()}
+              >
+                Refresh billing status
+              </s-button>
+            </s-stack>
           </s-section>
 
           {connectionError ? (
