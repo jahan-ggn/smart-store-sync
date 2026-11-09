@@ -14,6 +14,7 @@ import {
   saveCategoryMapping,
 } from "../services/categories.server";
 import { StoresError } from "../services/stores.server";
+import { ensureSourceAccount } from "../services/account.server";
 
 function errorMessage(error: unknown) {
   return error instanceof CategoryMappingError || error instanceof StoresError
@@ -25,6 +26,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session, admin } = await authenticate.admin(request);
 
   try {
+    await ensureSourceAccount(session.shop);
     return {
       page: await loadCategoryMapping(session.shop, admin),
       error: null,
@@ -51,6 +53,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const form = await request.formData();
 
   try {
+    await ensureSourceAccount(session.shop);
     await saveCategoryMapping(session.shop, admin, form);
 
     return data({

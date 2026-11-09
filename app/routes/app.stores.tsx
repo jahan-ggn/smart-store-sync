@@ -9,11 +9,14 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 
 import { authenticate } from "../shopify.server";
 import { StoresError, loadStores, saveStores } from "../services/stores.server";
+import { ensureSourceAccount } from "../services/account.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
 
   try {
+    await ensureSourceAccount(session.shop);
+
     return {
       ...(await loadStores(session.shop)),
       error: null,
@@ -35,6 +38,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const form = await request.formData();
 
   try {
+    await ensureSourceAccount(session.shop);
     await saveStores(session.shop, form);
 
     return data({

@@ -50,7 +50,7 @@ async function sourceRequest(
 
   if (response.status === 403) {
     throw new StoresError(
-      "Your subscription or store selection was rejected. Check the purchase token in Account & Plan.",
+      "Source access is unavailable. Check your Shopify plan and authorized store selection.",
     );
   }
 
@@ -73,7 +73,9 @@ async function subscriptionCredentials(shop: string) {
   const token = await getSavedPurchaseToken(shop);
 
   if (!token) {
-    throw new StoresError("Save your purchase token in Account & Plan first.");
+    throw new StoresError(
+      "Open Account & Plan to connect your source account automatically.",
+    );
   }
 
   return {

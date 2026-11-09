@@ -127,37 +127,21 @@ export async function saveAccount(shop: string, form: FormData) {
     );
   }
 
-  const suppliedToken = readText(form, "purchase_token");
-
-  if (suppliedToken.length > 256) {
-    throw new AccountError("Enter a valid purchase token.");
-  }
-
-  let token = suppliedToken;
-
-  if (!token) {
-    const saved = await db.accountSettings.findUnique({
-      where: { shop },
-    });
-
-    if (saved) {
-      token = decryptToken(saved.tokenEncrypted, shop);
-    }
-  }
-
-  if (!token) {
-    throw new AccountError("Enter your purchase token.");
-  }
-
-  const values = {
-    ...settings,
-    tokenEncrypted: encryptToken(token, shop),
-  };
-
-  await db.accountSettings.upsert({
+  const saved = await db.accountSettings.findUnique({
     where: { shop },
-    create: { shop, ...values },
-    update: values,
+    select: { shop: true },
+  });
+
+  if (!saved) {
+    throw new AccountError(
+      "Your source account is not connected. Reload Account & Plan to retry setup.",
+    );
+  }
+
+  // Settings forms never create or replace source credentials.
+  await db.accountSettings.update({
+    where: { shop },
+    data: settings,
   });
 }
 

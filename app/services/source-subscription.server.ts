@@ -18,7 +18,7 @@ export async function requireSourceSubscription(shop: string) {
   const token = await getSavedPurchaseToken(shop);
   if (!token)
     throw new SourceSubscriptionError(
-      "Save the shop's purchase token first.",
+      "Open the app in Shopify admin to connect the source account automatically.",
       403,
     );
   const base = process.env.SOURCE_API_BASE_URL?.replace(/\/+$/, "");

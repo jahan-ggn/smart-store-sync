@@ -4,22 +4,36 @@ import type {
   HeadersFunction,
   LoaderFunctionArgs,
 } from "react-router";
-import { data, useFetcher, useLoaderData } from "react-router";
+import { data, useFetcher, useLoaderData, useRevalidator } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 
 import { authenticate } from "../shopify.server";
 import {
   AccountError,
+  ensureSourceAccount,
   loadAccount,
   saveAccount,
+  SourceProvisioningError,
 } from "../services/account.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
 
+  let connectionError: string | null = null;
+
+  try {
+    await ensureSourceAccount(session.shop);
+  } catch (error) {
+    connectionError =
+      error instanceof SourceProvisioningError
+        ? error.message
+        : "Unable to connect your source account. Please try again.";
+  }
+
   return {
     shop: session.shop,
     account: await loadAccount(session.shop),
+    connectionError,
   };
 };
 
@@ -28,6 +42,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const form = await request.formData();
 
   try {
+    await ensureSourceAccount(session.shop);
     await saveAccount(session.shop, form);
 
     return data({
@@ -39,20 +54,28 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       {
         ok: false,
         message:
-          error instanceof AccountError
+          error instanceof AccountError ||
+          error instanceof SourceProvisioningError
             ? error.message
             : "Unable to save settings. Please try again.",
       },
-      { status: error instanceof AccountError ? 400 : 500 },
+      {
+        status:
+          error instanceof AccountError
+            ? 400
+            : error instanceof SourceProvisioningError
+              ? 503
+              : 500,
+      },
     );
   }
 };
 
 export default function AccountAndPlan() {
-  const { shop, account } = useLoaderData<typeof loader>();
+  const { shop, account, connectionError } = useLoaderData<typeof loader>();
+  const revalidator = useRevalidator();
   const fetcher = useFetcher<typeof action>();
 
-  const [token, setToken] = useState("");
   const [settings, setSettings] = useState(account.settings);
 
   const feedbackRef = useRef<HTMLDivElement>(null);
@@ -64,7 +87,6 @@ export default function AccountAndPlan() {
     }
 
     if (fetcher.data.ok) {
-      setToken("");
       setSettings(account.settings);
     }
 
@@ -89,13 +111,12 @@ export default function AccountAndPlan() {
         onSubmit={(event) => {
           event.preventDefault();
 
-          if (busy) {
+          if (busy || connectionError || !account.hasToken) {
             return;
           }
 
           void fetcher.submit(
             {
-              purchase_token: token,
               defaultMargin: settings.defaultMargin,
               minPrice: settings.minPrice,
               maxPrice: settings.maxPrice,
@@ -127,31 +148,29 @@ export default function AccountAndPlan() {
             <s-paragraph>Connected store: {shop}</s-paragraph>
           </s-section>
 
-          <s-section heading="Purchase token">
-            <s-stack direction="block" gap="base">
-              <s-password-field
-                label="Purchase token"
-                name="purchase_token"
-                autocomplete="off"
-                value={token}
-                disabled={busy}
-                placeholder={
-                  account.hasToken
-                    ? "A purchase token is already saved"
-                    : "Enter your purchase token"
-                }
-                onInput={(event) => {
-                  setToken(event.currentTarget.value);
-                }}
-              />
+          {connectionError ? (
+            <s-banner tone="critical" heading="Source account unavailable">
+              <s-paragraph>{connectionError}</s-paragraph>
 
+              <s-button
+                type="button"
+                disabled={busy || revalidator.state !== "idle"}
+                loading={revalidator.state !== "idle"}
+                onClick={() => void revalidator.revalidate()}
+              >
+                Retry connection
+              </s-button>
+            </s-banner>
+          ) : (
+            <s-section heading="Source account">
               <s-paragraph>
-                {account.hasToken
-                  ? "Leave this field blank to keep your saved token, or enter a replacement."
-                  : "Enter the token you received after purchase."}
+                Your source account is connected automatically. Source access
+                requires an approved Shopify plan and authorized catalogs.
               </s-paragraph>
-            </s-stack>
-          </s-section>
+
+              <s-link href="/app/stores">Choose source stores</s-link>
+            </s-section>
+          )}
 
           <s-section heading="Pricing">
             <s-stack direction="block" gap="base">
@@ -220,7 +239,7 @@ export default function AccountAndPlan() {
           <s-button
             type="submit"
             variant="primary"
-            disabled={busy}
+            disabled={busy || Boolean(connectionError) || !account.hasToken}
             loading={busy}
           >
             Save settings
