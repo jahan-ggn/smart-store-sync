@@ -107,20 +107,50 @@ export async function runNextAutomaticImport() {
         403,
       );
     // Prepare up to 250 image products, with checkpoints every 25, then yield.
-    console.table(await runImportStages(job.shop, job.id, false, undefined, 10));
+    console.table(
+      await runImportStages(job.shop, job.id, false, undefined, 10),
+    );
     await db.importJob.updateMany({
       where: { id: job.id, workerToken: null },
       data: { automaticFailures: 0, nextAttemptAt: null },
     });
   } catch (error) {
-    const permanent =
-      error instanceof SourceSubscriptionError && error.status === 403;
+    if (error instanceof SourceSubscriptionError) {
+      await db.importJob.updateMany({
+        where: {
+          id: job.id,
+          automaticFailures: job.automaticFailures,
+          activeShop: job.shop,
+          workerToken: null,
+          status: { in: READY },
+        },
+        data: {
+          nextAttemptAt: new Date(
+            Date.now() + (error.status === 403 ? 5 * 60_000 : 60_000),
+          ),
+          errorsJson: JSON.stringify([
+            {
+              code:
+                error.status === 403
+                  ? "SOURCE_ACCESS_PAUSED"
+                  : "SOURCE_ACCESS_UNAVAILABLE",
+              error: error.message,
+            },
+          ]),
+        },
+      });
+
+      return true;
+    }
+
     const attempts = job.automaticFailures + 1;
-    const failed = permanent || attempts >= 5;
+    const failed = attempts >= 5;
+
     const current = await db.importJob.findUnique({
       where: { id: job.id },
       select: { errorsJson: true },
     });
+
     const changed = await db.importJob.updateMany({
       // Never alter another live worker's ownership after a claim race.
       where: {
@@ -139,21 +169,22 @@ export async function runNextAutomaticImport() {
             ),
         ...(failed ? { status: "failed", activeShop: null } : {}),
         errorsJson:
-          !permanent && current?.errorsJson && current.errorsJson !== "[]"
+          current?.errorsJson && current.errorsJson !== "[]"
             ? current.errorsJson
             : JSON.stringify([
                 {
-                  error: permanent
-                    ? error.message
-                    : "Automatic import failed. Check app credentials, source availability and the worker logs, then resume or send a fresh delivery.",
+                  error:
+                    "Automatic import failed. Check app credentials, source availability and the worker logs, then resume or send a fresh delivery.",
                 },
               ]),
       },
     });
-    if (changed.count)
+
+    if (changed.count) {
       console.error(
         `Automatic import ${job.id}: ${failed ? "failed" : "retry scheduled"}.`,
       );
+    }
   }
   return true;
 }
