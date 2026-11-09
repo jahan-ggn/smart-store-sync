@@ -168,3 +168,104 @@ export async function getSavedPurchaseToken(shop: string) {
 
   return saved ? decryptToken(saved.tokenEncrypted, shop) : null;
 }
+
+export class SourceProvisioningError extends Error {}
+
+function provisioningRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// Call only after Shopify authentication, using session.shop from the server.
+export async function ensureSourceAccount(shop: string): Promise<void> {
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.myshopify\.com$/.test(shop)) {
+    throw new SourceProvisioningError("Invalid Shopify shop domain.");
+  }
+
+  if (await getSavedPurchaseToken(shop)) return;
+
+  // Check encryption configuration before creating a backend record.
+  encryptionKey();
+
+  const base = process.env.SOURCE_API_BASE_URL?.replace(/\/+$/, "");
+  const key = process.env.SHOPIFY_PROVISIONING_API_KEY ?? "";
+
+  if (!base || key.length < 32) {
+    throw new SourceProvisioningError("Source provisioning is not configured.");
+  }
+
+  let endpoint: URL;
+
+  try {
+    endpoint = new URL(`${base}/subscriptions/shopify/provision`);
+  } catch {
+    throw new SourceProvisioningError("Invalid source service URL.");
+  }
+
+  const local = ["localhost", "127.0.0.1", "[::1]"].includes(endpoint.hostname);
+
+  if (
+    endpoint.username ||
+    endpoint.password ||
+    endpoint.search ||
+    endpoint.hash ||
+    (endpoint.protocol !== "https:" &&
+      !(
+        endpoint.protocol === "http:" &&
+        local &&
+        process.env.NODE_ENV !== "production"
+      ))
+  ) {
+    throw new SourceProvisioningError("The source service requires HTTPS.");
+  }
+
+  let result: unknown;
+
+  try {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Shopify-Provisioning-Key": key,
+      },
+      body: JSON.stringify({ shop }),
+      signal: AbortSignal.timeout(15_000),
+      redirect: "error",
+      cache: "no-store",
+    });
+
+    if (!response.ok) throw new SourceProvisioningError();
+
+    result = await response.json();
+  } catch {
+    throw new SourceProvisioningError(
+      "Unable to connect your source account. Please try again.",
+    );
+  }
+
+  if (
+    !provisioningRecord(result) ||
+    result.success !== true ||
+    !provisioningRecord(result.data) ||
+    result.data.shop !== shop ||
+    result.data.buyer_domain !== `https://${shop}` ||
+    result.data.platform !== "shopify" ||
+    !Number.isSafeInteger(result.data.subscription_id) ||
+    (result.data.subscription_id as number) < 1 ||
+    typeof result.data.token !== "string" ||
+    !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(
+      result.data.token,
+    )
+  ) {
+    throw new SourceProvisioningError("Invalid source provisioning response.");
+  }
+
+  const tokenEncrypted = encryptToken(result.data.token, shop);
+
+  await db.accountSettings.upsert({
+    where: { shop },
+    create: { shop, tokenEncrypted, ...defaults },
+
+    // Preserve credentials and settings if another request saved them first.
+    update: { shop },
+  });
+}
