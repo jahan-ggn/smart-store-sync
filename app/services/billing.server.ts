@@ -1,6 +1,7 @@
 import process from "node:process";
 
 import type { createImportAdmin } from "./import-admin.server";
+import { ensureSourceAccount, getSavedPurchaseToken } from "./account.server";
 
 export class BillingUnavailable extends Error {
   constructor() {
@@ -183,6 +184,90 @@ export async function readShopifyBilling(
     };
   } catch {
     // Never expose raw API errors, headers, response bodies or credentials.
+    throw new BillingUnavailable();
+  }
+}
+
+// Call after Shopify authentication.
+// A failed Shopify read must never overwrite backend expiry.
+export async function syncShopifyBilling(
+  shop: string,
+  admin: ReturnType<typeof createImportAdmin>,
+): Promise<BillingState> {
+  const billing = await readShopifyBilling(shop, admin);
+
+  try {
+    const base = process.env.SOURCE_API_BASE_URL?.replace(/\/+$/, "");
+    const key = process.env.SHOPIFY_PROVISIONING_API_KEY ?? "";
+
+    if (!base || key.length < 32) {
+      throw new BillingUnavailable();
+    }
+
+    const endpoint = new URL(`${base}/subscriptions/shopify/billing`);
+    const local = ["localhost", "127.0.0.1", "[::1]"].includes(
+      endpoint.hostname,
+    );
+
+    if (
+      endpoint.username ||
+      endpoint.password ||
+      endpoint.search ||
+      endpoint.hash ||
+      (endpoint.protocol !== "https:" &&
+        !(
+          endpoint.protocol === "http:" &&
+          local &&
+          process.env.NODE_ENV !== "production"
+        ))
+    ) {
+      throw new BillingUnavailable();
+    }
+
+    await ensureSourceAccount(shop);
+
+    const token = await getSavedPurchaseToken(shop);
+
+    if (!token) {
+      throw new BillingUnavailable();
+    }
+
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Shopify-Provisioning-Key": key,
+      },
+      body: JSON.stringify({
+        shop,
+        token,
+        expires_at: billing.status === "inactive" ? null : billing.expiresAt,
+      }),
+      signal: AbortSignal.timeout(15_000),
+      redirect: "error",
+      cache: "no-store",
+    });
+
+    if (!response.ok) {
+      throw new BillingUnavailable();
+    }
+
+    const result: unknown = await response.json();
+
+    if (
+      !record(result) ||
+      result.success !== true ||
+      !record(result.data) ||
+      result.data.shop !== shop ||
+      !Number.isSafeInteger(result.data.subscription_id) ||
+      (result.data.subscription_id as number) < 1 ||
+      typeof result.data.expires_at !== "string"
+    ) {
+      throw new BillingUnavailable();
+    }
+
+    return billing;
+  } catch {
     throw new BillingUnavailable();
   }
 }
