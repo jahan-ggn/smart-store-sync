@@ -188,12 +188,11 @@ export async function readShopifyBilling(
   }
 }
 
-// Call after Shopify authentication.
-// A failed Shopify read must never overwrite backend expiry.
 export async function syncShopifyBilling(
   shop: string,
   admin: ReturnType<typeof createImportAdmin>,
 ): Promise<BillingState> {
+  const checkedAt = new Date().toISOString();
   const billing = await readShopifyBilling(shop, admin);
 
   try {
@@ -242,6 +241,7 @@ export async function syncShopifyBilling(
         shop,
         token,
         expires_at: billing.status === "inactive" ? null : billing.expiresAt,
+        checked_at: checkedAt,
       }),
       signal: AbortSignal.timeout(15_000),
       redirect: "error",
