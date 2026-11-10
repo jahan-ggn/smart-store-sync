@@ -193,7 +193,7 @@ async function writeSourceBilling(
   token: string,
   expiresAt: string | null,
   checkedAt: string,
-): Promise<void> {
+): Promise<boolean> {
   try {
     const base = process.env.SOURCE_API_BASE_URL?.replace(/\/+$/, "");
     const key = process.env.SHOPIFY_PROVISIONING_API_KEY ?? "";
@@ -252,10 +252,13 @@ async function writeSourceBilling(
       result.data.shop !== shop ||
       !Number.isSafeInteger(result.data.subscription_id) ||
       (result.data.subscription_id as number) < 1 ||
-      typeof result.data.expires_at !== "string"
+      typeof result.data.expires_at !== "string" ||
+      (result.data.stale !== undefined &&
+        typeof result.data.stale !== "boolean")
     ) {
       throw new BillingUnavailable();
     }
+    return result.data.stale !== true;
   } catch {
     throw new BillingUnavailable();
   }
@@ -274,12 +277,14 @@ export async function syncShopifyBilling(
     const token = await getSavedPurchaseToken(shop);
     if (!token) throw new BillingUnavailable();
 
-    await writeSourceBilling(
+    const current = await writeSourceBilling(
       shop,
       token,
       billing.status === "inactive" ? null : billing.expiresAt,
       checkedAt,
     );
+
+    if (!current) throw new BillingUnavailable();
 
     return billing;
   } catch {
@@ -292,7 +297,7 @@ export async function syncShopifyBilling(
 export async function revokeSourceBilling(
   shop: string,
   triggeredAt: string,
-): Promise<void> {
+): Promise<boolean> {
   try {
     if (
       !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.myshopify\.com$/.test(shop) ||
@@ -306,10 +311,10 @@ export async function revokeSourceBilling(
 
     const token = await getSavedPurchaseToken(shop);
 
-    // An uninstall must never create a source account.
-    if (!token) return;
+    // No backend account exists, but local uninstall cleanup can proceed.
+    if (!token) return true;
 
-    await writeSourceBilling(shop, token, null, triggeredAt);
+    return await writeSourceBilling(shop, token, null, triggeredAt);
   } catch {
     throw new BillingUnavailable();
   }
