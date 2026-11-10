@@ -188,13 +188,12 @@ export async function readShopifyBilling(
   }
 }
 
-export async function syncShopifyBilling(
+async function writeSourceBilling(
   shop: string,
-  admin: ReturnType<typeof createImportAdmin>,
-): Promise<BillingState> {
-  const checkedAt = new Date().toISOString();
-  const billing = await readShopifyBilling(shop, admin);
-
+  token: string,
+  expiresAt: string | null,
+  checkedAt: string,
+): Promise<void> {
   try {
     const base = process.env.SOURCE_API_BASE_URL?.replace(/\/+$/, "");
     const key = process.env.SHOPIFY_PROVISIONING_API_KEY ?? "";
@@ -223,14 +222,6 @@ export async function syncShopifyBilling(
       throw new BillingUnavailable();
     }
 
-    await ensureSourceAccount(shop);
-
-    const token = await getSavedPurchaseToken(shop);
-
-    if (!token) {
-      throw new BillingUnavailable();
-    }
-
     const response = await fetch(endpoint, {
       method: "POST",
       headers: {
@@ -240,7 +231,7 @@ export async function syncShopifyBilling(
       body: JSON.stringify({
         shop,
         token,
-        expires_at: billing.status === "inactive" ? null : billing.expiresAt,
+        expires_at: expiresAt,
         checked_at: checkedAt,
       }),
       signal: AbortSignal.timeout(15_000),
@@ -265,8 +256,60 @@ export async function syncShopifyBilling(
     ) {
       throw new BillingUnavailable();
     }
+  } catch {
+    throw new BillingUnavailable();
+  }
+}
+
+export async function syncShopifyBilling(
+  shop: string,
+  admin: ReturnType<typeof createImportAdmin>,
+): Promise<BillingState> {
+  const checkedAt = new Date().toISOString();
+  const billing = await readShopifyBilling(shop, admin);
+
+  try {
+    await ensureSourceAccount(shop);
+
+    const token = await getSavedPurchaseToken(shop);
+    if (!token) throw new BillingUnavailable();
+
+    await writeSourceBilling(
+      shop,
+      token,
+      billing.status === "inactive" ? null : billing.expiresAt,
+      checkedAt,
+    );
 
     return billing;
+  } catch {
+    throw new BillingUnavailable();
+  }
+}
+
+// Call only after authenticating an uninstall webhook.
+// Preserve the original event time when retrying the same uninstall.
+export async function revokeSourceBilling(
+  shop: string,
+  triggeredAt: string,
+): Promise<void> {
+  try {
+    if (
+      !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.myshopify\.com$/.test(shop) ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(
+        triggeredAt,
+      ) ||
+      !Number.isFinite(Date.parse(triggeredAt))
+    ) {
+      throw new BillingUnavailable();
+    }
+
+    const token = await getSavedPurchaseToken(shop);
+
+    // An uninstall must never create a source account.
+    if (!token) return;
+
+    await writeSourceBilling(shop, token, null, triggeredAt);
   } catch {
     throw new BillingUnavailable();
   }
