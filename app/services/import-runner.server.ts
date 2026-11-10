@@ -6,6 +6,10 @@ import { runProductImport } from "./import-worker.server";
 import { runInventoryImport } from "./inventory.server";
 import { runImageImport } from "./image-worker.server";
 import { publishingProgress, runPublishingImport } from "./publishing.server";
+import {
+  requireSourceSubscription,
+  SourceSubscriptionError,
+} from "./source-subscription.server";
 
 // Shared by the CLI and the automatic worker; no detached HTTP background tasks.
 export async function runImportStages(
@@ -22,6 +26,27 @@ export async function runImportStages(
   if (job.status === "completed") return publishingProgress(shop, jobId);
   if (job.activeShop !== shop)
     throw new Error("This import is no longer active.");
+  const subscription = await requireSourceSubscription(shop);
+  const snapshot = JSON.parse(job.ruleSnapshotJson) as {
+    sourceStoreIds?: unknown;
+  };
+
+  if (
+    !Array.isArray(snapshot.sourceStoreIds) ||
+    !snapshot.sourceStoreIds.length ||
+    snapshot.sourceStoreIds.some(
+      (id: unknown) =>
+        typeof id !== "number" ||
+        !Number.isSafeInteger(id) ||
+        id < 1 ||
+        !subscription.storeIds.includes(id),
+    )
+  ) {
+    throw new SourceSubscriptionError(
+      "The subscribed source stores changed. Send a fresh CSV for the current selection.",
+      403,
+    );
+  }
   for (const name of [
     "SHOPIFY_API_KEY",
     "SHOPIFY_API_SECRET",

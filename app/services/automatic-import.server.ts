@@ -3,10 +3,7 @@ import { resolve, join } from "node:path";
 import db from "../db.server";
 import { cleanupImportHistory } from "./import-jobs.server";
 import { runImportStages } from "./import-runner.server";
-import {
-  requireSourceSubscription,
-  SourceSubscriptionError,
-} from "./source-subscription.server";
+import { SourceSubscriptionError } from "./source-subscription.server";
 import { createImportAdmin } from "./import-admin.server";
 import { syncShopifyBilling } from "./billing.server";
 
@@ -112,19 +109,6 @@ export async function runNextAutomaticImport() {
     if (!recovered.count) return true;
   }
   try {
-    const subscription = await requireSourceSubscription(job.shop);
-    const snapshot = JSON.parse(job.ruleSnapshotJson) as {
-      sourceStoreIds?: number[];
-    };
-    if (
-      !Array.isArray(snapshot.sourceStoreIds) ||
-      !snapshot.sourceStoreIds.length ||
-      snapshot.sourceStoreIds.some((id) => !subscription.storeIds.includes(id))
-    )
-      throw new SourceSubscriptionError(
-        "The subscribed source stores changed. Send a fresh CSV for the current selection.",
-        403,
-      );
     // Prepare up to 250 image products, with checkpoints every 25, then yield.
     console.table(
       await runImportStages(job.shop, job.id, false, undefined, 10),

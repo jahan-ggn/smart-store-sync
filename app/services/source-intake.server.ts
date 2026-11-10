@@ -187,7 +187,7 @@ export async function receiveSourceCsv(request: Request) {
         { status: 405, headers: { Allow: "POST" } },
       );
     const delivery = verifyDeliveryHeaders(request);
-    const subscription = await requireSourceSubscription(delivery.shop);
+    let subscription = await requireSourceSubscription(delivery.shop);
     const session = await db.session.findFirst({
       where: { shop: delivery.shop, isOnline: false },
       select: { id: true },
@@ -219,6 +219,7 @@ export async function receiveSourceCsv(request: Request) {
     directory = await mkdtemp(join(incoming, "upload-"));
     const path = join(directory, "source.csv");
     await saveUpload(request, path, delivery.hash);
+    subscription = await requireSourceSubscription(delivery.shop);
     let job;
     try {
       job = await prepareImportJob(path, delivery.shop, {
