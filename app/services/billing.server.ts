@@ -21,7 +21,11 @@ const identityQuery = `query BillingIdentity {
   currentAppInstallation { app { id apiKey } }
 }`;
 
-const subscriptionQuery = `query BillingSubscription($appId: ID!, $shopId: ID!) {
+const subscriptionQuery = `query BillingSubscription(
+  $appId: ID!
+  $shopId: ID!
+  $eventsFilter: EventFilterInput!
+) {
   activeSubscription(appId: $appId, shopId: $shopId) {
     app { id }
     shop { id myshopifyDomain }
@@ -30,6 +34,19 @@ const subscriptionQuery = `query BillingSubscription($appId: ID!, $shopId: ID!) 
     currentBillingCycle { endTime }
     cancelAtEndOfCycle
     items { handle }
+  }
+  subscriptionEvents: events(
+    filter: $eventsFilter
+    first: 1
+    orderBy: OCCURRED_AT_DESC
+  ) {
+    edges {
+      node {
+        __typename
+        eventType
+        ... on SubscriptionStatus { state }
+      }
+    }
   }
 }`;
 
@@ -96,6 +113,9 @@ export async function readShopifyBilling(
       throw new BillingUnavailable();
     }
 
+    const historyEnd = new Date();
+    const historyStart = new Date(historyEnd.getTime() - 364 * 86400_000);
+
     const response = await fetch(
       `https://partners.shopify.com/${partnerId}/api/2026-07/graphql.json`,
       {
@@ -109,6 +129,17 @@ export async function readShopifyBilling(
           variables: {
             appId: app.id,
             shopId: savedShop.id,
+            eventsFilter: {
+              subjectId: app.id,
+              shopId: savedShop.id,
+              eventTypes: [
+                "SUBSCRIPTION_CREATED",
+                "SUBSCRIPTION_FROZEN",
+                "SUBSCRIPTION_UNFROZEN",
+              ],
+              occurredAtMin: historyStart.toISOString(),
+              occurredAtMax: historyEnd.toISOString(),
+            },
           },
         }),
         signal: AbortSignal.timeout(15_000),
@@ -121,7 +152,8 @@ export async function readShopifyBilling(
       throw new BillingUnavailable();
     }
 
-    const subscription = graphqlData(await response.json()).activeSubscription;
+    const data = graphqlData(await response.json());
+    const subscription = data.activeSubscription;
 
     if (subscription === null) {
       return {
@@ -146,6 +178,48 @@ export async function readShopifyBilling(
       subscription.items[0].handle !== "standard"
     ) {
       throw new BillingUnavailable();
+    }
+
+    const history = data.subscriptionEvents;
+
+    if (
+      !record(history) ||
+      !Array.isArray(history.edges) ||
+      history.edges.length > 1
+    ) {
+      throw new BillingUnavailable();
+    }
+
+    if (history.edges.length) {
+      const edge: unknown = history.edges[0];
+
+      if (!record(edge) || !record(edge.node)) {
+        throw new BillingUnavailable();
+      }
+
+      const event = edge.node;
+      const states: Record<string, string> = {
+        SUBSCRIPTION_CREATED: "CREATED",
+        SUBSCRIPTION_FROZEN: "FROZEN",
+        SUBSCRIPTION_UNFROZEN: "UNFROZEN",
+      };
+
+      if (
+        event.__typename !== "SubscriptionStatus" ||
+        typeof event.eventType !== "string" ||
+        !Object.hasOwn(states, event.eventType) ||
+        event.state !== states[event.eventType]
+      ) {
+        throw new BillingUnavailable();
+      }
+
+      if (event.eventType === "SUBSCRIPTION_FROZEN") {
+        return {
+          status: "inactive",
+          expiresAt: null,
+          cancelAtEndOfCycle: subscription.cancelAtEndOfCycle,
+        };
+      }
     }
 
     const trial = subscription.trialEndsAt !== null;
