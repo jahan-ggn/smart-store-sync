@@ -7,6 +7,8 @@ import {
   requireSourceSubscription,
   SourceSubscriptionError,
 } from "./source-subscription.server";
+import { createImportAdmin } from "./import-admin.server";
+import { syncShopifyBilling } from "./billing.server";
 
 const READY = [
   "ready",
@@ -24,9 +26,26 @@ const RUNNING = [
   "publishing_running",
 ];
 
+let nextBillingRefreshAt = 0;
+
 export async function maintainAutomaticImports() {
-  // A request or host crash can leave preparation unfinished. This stage never
-  // writes to Shopify, and automatic requests are limited to a 60-second upload.
+  if (Date.now() >= nextBillingRefreshAt) {
+    const shops = await db.session.findMany({
+      where: { isOnline: false },
+      distinct: ["shop"],
+      select: { shop: true },
+    });
+
+    nextBillingRefreshAt = Date.now() + 5 * 60_000;
+
+    for (const { shop } of shops) {
+      try {
+        await syncShopifyBilling(shop, createImportAdmin(shop));
+      } catch {
+        console.warn(`Billing refresh deferred for ${shop}.`);
+      }
+    }
+  }
   await db.importJob.updateMany({
     where: {
       sourceDeliveryId: { not: null },
