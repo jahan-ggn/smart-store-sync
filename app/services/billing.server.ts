@@ -1,7 +1,13 @@
 import process from "node:process";
 
 import type { createImportAdmin } from "./import-admin.server";
-import { ensureSourceAccount, getSavedPurchaseToken } from "./account.server";
+import {
+  decryptToken,
+  ensureSourceAccount,
+  getSavedPurchaseToken,
+} from "./account.server";
+import { stopShopImportsInTransaction } from "./privacy.server";
+import db from "../db.server";
 
 export class BillingUnavailable extends Error {
   constructor() {
@@ -267,6 +273,7 @@ async function writeSourceBilling(
   token: string,
   expiresAt: string | null,
   checkedAt: string,
+  timeoutMs = 15_000,
 ): Promise<boolean> {
   try {
     const base = process.env.SOURCE_API_BASE_URL?.replace(/\/+$/, "");
@@ -308,7 +315,7 @@ async function writeSourceBilling(
         expires_at: expiresAt,
         checked_at: checkedAt,
       }),
-      signal: AbortSignal.timeout(15_000),
+      signal: AbortSignal.timeout(timeoutMs),
       redirect: "error",
       cache: "no-store",
     });
@@ -346,6 +353,16 @@ export async function syncShopifyBilling(
   const billing = await readShopifyBilling(shop, admin);
 
   try {
+    const lifecycle = await db.shopLifecycle.findUnique({
+      where: { shop },
+    });
+
+    if (
+      lifecycle?.uninstalledAt &&
+      lifecycle.uninstalledAt >= new Date(checkedAt)
+    ) {
+      throw new BillingUnavailable();
+    }
     await ensureSourceAccount(shop);
 
     const token = await getSavedPurchaseToken(shop);
@@ -360,36 +377,170 @@ export async function syncShopifyBilling(
 
     if (!current) throw new BillingUnavailable();
 
+    await db.$transaction(async (tx) => {
+      await tx.shopLifecycle.upsert({
+        where: { shop },
+        create: { shop },
+        update: {},
+      });
+
+      const saved = await tx.shopLifecycle.updateMany({
+        where: {
+          shop,
+          AND: [
+            {
+              OR: [
+                { uninstalledAt: null },
+                { uninstalledAt: { lt: new Date(checkedAt) } },
+              ],
+            },
+            {
+              OR: [
+                { billingCheckedAt: null },
+                { billingCheckedAt: { lte: new Date(checkedAt) } },
+              ],
+            },
+          ],
+        },
+        data: {
+          billingCheckedAt: new Date(checkedAt),
+        },
+      });
+
+      if (!saved.count) throw new BillingUnavailable();
+    });
+
     return billing;
   } catch {
     throw new BillingUnavailable();
   }
 }
 
-// Call only after authenticating an uninstall webhook.
-// Preserve the original event time when retrying the same uninstall.
-export async function revokeSourceBilling(
+export async function queueSourceBillingRevocation(
   shop: string,
   triggeredAt: string,
-): Promise<boolean> {
+) {
+  if (
+    !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.myshopify\.com$/.test(shop) ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(
+      triggeredAt,
+    ) ||
+    !Number.isFinite(Date.parse(triggeredAt)) ||
+    Date.parse(triggeredAt) > Date.now() + 300_000
+  ) {
+    throw new BillingUnavailable();
+  }
+
+  const uninstalledAt = new Date(triggeredAt);
+
   try {
-    if (
-      !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.myshopify\.com$/.test(shop) ||
-      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(
-        triggeredAt,
-      ) ||
-      !Number.isFinite(Date.parse(triggeredAt))
-    ) {
-      throw new BillingUnavailable();
-    }
+    await db.$transaction(async (tx) => {
+      const lifecycle = await tx.shopLifecycle.findUnique({
+        where: { shop },
+      });
 
-    const token = await getSavedPurchaseToken(shop);
+      if (
+        (lifecycle?.authenticatedAt &&
+          lifecycle.authenticatedAt > uninstalledAt) ||
+        (lifecycle?.billingCheckedAt &&
+          lifecycle.billingCheckedAt > uninstalledAt) ||
+        (lifecycle?.uninstalledAt && lifecycle.uninstalledAt >= uninstalledAt)
+      ) {
+        return;
+      }
 
-    // No backend account exists, but local uninstall cleanup can proceed.
-    if (!token) return true;
+      const account = await tx.accountSettings.findUnique({
+        where: { shop },
+      });
 
-    return await writeSourceBilling(shop, token, null, triggeredAt);
+      const tokenEncrypted =
+        account?.tokenEncrypted ?? lifecycle?.revocationTokenEncrypted ?? null;
+
+      const data = {
+        uninstalledAt,
+        revocationTokenEncrypted: tokenEncrypted,
+        revocationNextAttemptAt: tokenEncrypted ? new Date() : null,
+      };
+
+      await tx.shopLifecycle.upsert({
+        where: { shop },
+        create: { shop, ...data },
+        update: data,
+      });
+
+      await stopShopImportsInTransaction(tx, shop);
+    });
   } catch {
     throw new BillingUnavailable();
+  }
+}
+
+export async function retrySourceBillingRevocations() {
+  const pending = await db.shopLifecycle.findMany({
+    where: {
+      revocationTokenEncrypted: { not: null },
+      revocationNextAttemptAt: { lte: new Date() },
+    },
+    orderBy: { revocationNextAttemptAt: "asc" },
+    take: 10,
+  });
+
+  for (const item of pending) {
+    const where = {
+      shop: item.shop,
+      uninstalledAt: item.uninstalledAt,
+      revocationTokenEncrypted: item.revocationTokenEncrypted,
+    };
+
+    try {
+      if (!item.uninstalledAt || !item.revocationTokenEncrypted) continue;
+
+      await writeSourceBilling(
+        item.shop,
+        decryptToken(item.revocationTokenEncrypted, item.shop),
+        null,
+        item.uninstalledAt.toISOString(),
+        3_000,
+      );
+
+      // Success or a stale acknowledgement finishes this event.
+      // Retrying must always retain the original uninstall timestamp.
+      await db.$transaction(async (tx) => {
+        const acknowledged = await tx.shopLifecycle.updateMany({
+          where,
+          data: {
+            revocationTokenEncrypted: null,
+            revocationNextAttemptAt: null,
+          },
+        });
+
+        if (!acknowledged.count) return;
+
+        const account = await tx.accountSettings.findUnique({
+          where: { shop: item.shop },
+        });
+        const sessions = await tx.session.count({
+          where: { shop: item.shop },
+        });
+
+        if (!account && !sessions) {
+          await tx.shopLifecycle.deleteMany({
+            where: {
+              ...where,
+              revocationTokenEncrypted: null,
+            },
+          });
+        }
+      });
+    } catch {
+      await db.shopLifecycle.updateMany({
+        where,
+        data: {
+          revocationNextAttemptAt: new Date(Date.now() + 60_000),
+        },
+      });
+
+      console.warn(`Source billing revocation deferred for ${item.shop}.`);
+    }
   }
 }

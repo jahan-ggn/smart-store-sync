@@ -2,24 +2,29 @@ import { rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import db from "../db.server";
 import { checkImportShop } from "./import-jobs.server";
+import type { Prisma } from "@prisma/client";
 
-// Revoke credentials and worker ownership even when Shopify no longer supplies
-// a session (for example, a repeated uninstall or shop/redact delivery).
 export async function stopShopImports(shop: string) {
   checkImportShop(shop);
-  await db.$transaction([
-    db.session.deleteMany({ where: { shop } }),
-    db.importJob.updateMany({
-      where: { shop, activeShop: shop },
-      data: {
-        status: "cancelled",
-        activeShop: null,
-        workerToken: null,
-        leaseExpiresAt: null,
-        nextAttemptAt: null,
-      },
-    }),
-  ]);
+  await db.$transaction((tx) => stopShopImportsInTransaction(tx, shop));
+}
+
+export async function stopShopImportsInTransaction(
+  tx: Prisma.TransactionClient,
+  shop: string,
+) {
+  await tx.session.deleteMany({ where: { shop } });
+
+  await tx.importJob.updateMany({
+    where: { shop, activeShop: shop },
+    data: {
+      status: "cancelled",
+      activeShop: null,
+      workerToken: null,
+      leaseExpiresAt: null,
+      nextAttemptAt: null,
+    },
+  });
 }
 
 export async function redactShopData(shop: string) {
@@ -28,6 +33,9 @@ export async function redactShopData(shop: string) {
   await db.$transaction([
     db.accountSettings.deleteMany({ where: { shop } }),
     db.categoryMapping.deleteMany({ where: { shop } }),
+    db.shopLifecycle.deleteMany({
+      where: { shop, revocationTokenEncrypted: null },
+    }),
   ]);
   const jobs = await db.importJob.findMany({
     where: { shop },

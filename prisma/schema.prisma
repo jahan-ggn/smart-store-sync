@@ -95,3 +95,14 @@ model ImportJob {
 
   @@index([shop, createdAt])
 }
+
+model ShopLifecycle {
+  shop                     String    @id
+  authenticatedAt          DateTime?
+  billingCheckedAt         DateTime?
+  uninstalledAt            DateTime?
+  revocationTokenEncrypted String?
+  revocationNextAttemptAt  DateTime?
+
+  @@index([revocationNextAttemptAt])
+}

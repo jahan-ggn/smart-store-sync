@@ -16,6 +16,19 @@ const shopify = shopifyApp({
   authPathPrefix: "/auth",
   sessionStorage: new PrismaSessionStorage(prisma),
   distribution: AppDistribution.AppStore,
+  hooks: {
+    afterAuth: async ({ session }) => {
+      if (session.isOnline) return;
+
+      const authenticatedAt = new Date();
+
+      await prisma.shopLifecycle.upsert({
+        where: { shop: session.shop },
+        create: { shop: session.shop, authenticatedAt },
+        update: { authenticatedAt },
+      });
+    },
+  },
   future: {
     expiringOfflineAccessTokens: true,
   },

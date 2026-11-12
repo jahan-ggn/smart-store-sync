@@ -52,7 +52,7 @@ function encryptToken(token: string, shop: string) {
   ].join(".");
 }
 
-function decryptToken(value: string, shop: string) {
+export function decryptToken(value: string, shop: string) {
   const parts = value.split(".");
 
   if (parts.length !== 4 || parts[0] !== "v1") {

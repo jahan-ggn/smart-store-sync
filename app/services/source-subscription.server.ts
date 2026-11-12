@@ -1,6 +1,7 @@
 import process from "node:process";
 import { getSavedPurchaseToken } from "./account.server";
 import { checkImportShop } from "./import-jobs.server";
+import db from "../db.server";
 
 export class SourceSubscriptionError extends Error {
   constructor(
@@ -10,11 +11,32 @@ export class SourceSubscriptionError extends Error {
     super(message);
   }
 }
+
+export class SourceSelectionChanged extends SourceSubscriptionError {
+  constructor() {
+    super(
+      "The subscribed source stores changed. Send a fresh CSV for the current selection.",
+      403,
+    );
+  }
+}
+
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 export async function requireSourceSubscription(shop: string) {
   checkImportShop(shop);
+  const lifecycle = await db.shopLifecycle.findUnique({
+    where: { shop },
+  });
+
+  if (
+    lifecycle?.uninstalledAt &&
+    (!lifecycle.authenticatedAt ||
+      lifecycle.uninstalledAt >= lifecycle.authenticatedAt)
+  ) {
+    throw new SourceSubscriptionError("The Shopify app is uninstalled.", 403);
+  }
   const token = await getSavedPurchaseToken(shop);
   if (!token)
     throw new SourceSubscriptionError(

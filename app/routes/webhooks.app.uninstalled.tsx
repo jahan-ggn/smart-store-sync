@@ -1,9 +1,8 @@
 import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
-import { stopShopImports } from "../services/privacy.server";
 import {
   BillingUnavailable,
-  revokeSourceBilling,
+  queueSourceBillingRevocation,
 } from "../services/billing.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -14,14 +13,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   try {
-    const current = await revokeSourceBilling(
+    await queueSourceBillingRevocation(
       shop,
       request.headers.get("X-Shopify-Triggered-At") ?? "",
     );
-
-    if (current) {
-      await stopShopImports(shop);
-    }
   } catch (error) {
     if (!(error instanceof BillingUnavailable)) throw error;
 

@@ -3,9 +3,15 @@ import { resolve, join } from "node:path";
 import db from "../db.server";
 import { cleanupImportHistory } from "./import-jobs.server";
 import { runImportStages } from "./import-runner.server";
-import { SourceSubscriptionError } from "./source-subscription.server";
+import {
+  SourceSelectionChanged,
+  SourceSubscriptionError,
+} from "./source-subscription.server";
 import { createImportAdmin } from "./import-admin.server";
-import { syncShopifyBilling } from "./billing.server";
+import {
+  retrySourceBillingRevocations,
+  syncShopifyBilling,
+} from "./billing.server";
 
 const READY = [
   "ready",
@@ -26,6 +32,7 @@ const RUNNING = [
 let nextBillingRefreshAt = 0;
 
 export async function maintainAutomaticImports() {
+  await retrySourceBillingRevocations();
   if (Date.now() >= nextBillingRefreshAt) {
     const shops = await db.session.findMany({
       where: { isOnline: false },
@@ -125,15 +132,26 @@ export async function runNextAutomaticImport() {
           status: { in: READY },
         },
         data: {
-          nextAttemptAt: new Date(
-            Date.now() + (error.status === 403 ? 5 * 60_000 : 60_000),
-          ),
+          ...(error instanceof SourceSelectionChanged
+            ? {
+                status: "cancelled",
+                activeShop: null,
+                nextAttemptAt: null,
+                leaseExpiresAt: null,
+              }
+            : {
+                nextAttemptAt: new Date(
+                  Date.now() + (error.status === 403 ? 5 * 60_000 : 60_000),
+                ),
+              }),
           errorsJson: JSON.stringify([
             {
               code:
-                error.status === 403
-                  ? "SOURCE_ACCESS_PAUSED"
-                  : "SOURCE_ACCESS_UNAVAILABLE",
+                error instanceof SourceSelectionChanged
+                  ? "SOURCE_SELECTION_CHANGED"
+                  : error.status === 403
+                    ? "SOURCE_ACCESS_PAUSED"
+                    : "SOURCE_ACCESS_UNAVAILABLE",
               error: error.message,
             },
           ]),

@@ -8,7 +8,7 @@ import { runImageImport } from "./image-worker.server";
 import { publishingProgress, runPublishingImport } from "./publishing.server";
 import {
   requireSourceSubscription,
-  SourceSubscriptionError,
+  SourceSelectionChanged,
 } from "./source-subscription.server";
 
 // Shared by the CLI and automatic worker. Every batch rechecks source access.
@@ -62,10 +62,7 @@ async function runImportBatch(
         !subscription.storeIds.includes(id),
     )
   ) {
-    throw new SourceSubscriptionError(
-      "The subscribed source stores changed. Send a fresh CSV for the current selection.",
-      403,
-    );
+    throw new SourceSelectionChanged();
   }
 
   for (const name of [
