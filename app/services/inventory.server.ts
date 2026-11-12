@@ -381,7 +381,12 @@ export async function runInventoryImport(
               !/^[1-9]\d*:[1-9]\d*$/.test(sourceId)
             )
               return;
-            if (!feed.stores.has(Number(sourceId.split(":")[0]))) return;
+            if (
+              !(job.sourceDeliveryId && job.sourceGeneratedAt) &&
+              !feed.stores.has(Number(sourceId.split(":")[0]))
+            ) {
+              return;
+            }
             const variants = [...product.variants.nodes];
             let page = product.variants;
             const cursors = new Set<string>();
