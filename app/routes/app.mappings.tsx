@@ -278,15 +278,20 @@ function MappingForm({
                           <s-select
                             label={`Collection for ${row.categoryName}`}
                             labelAccessibilityVisibility="exclusive"
-                            value={row.collectionId}
+                            value={row.collectionId || "__not_mapped__"}
                             disabled={busy}
                             onChange={(event) =>
                               updateRow(row.categoryId, {
-                                collectionId: event.currentTarget.value,
+                                collectionId:
+                                  event.currentTarget.value === "__not_mapped__"
+                                    ? ""
+                                    : event.currentTarget.value,
                               })
                             }
                           >
-                            <s-option value="">Not mapped</s-option>
+                            <s-option value="__not_mapped__">
+                              Not mapped
+                            </s-option>
 
                             {row.collectionId &&
                               !collectionIds.has(row.collectionId) && (
