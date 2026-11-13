@@ -74,7 +74,10 @@ export function createImportRules(settings: Settings, mappings: Mapping[]) {
       `${mapping.sourceStoreId}:${mapping.sourceCategoryId}`,
       {
         collectionId: mapping.collectionId,
-        margin: wholeAmount(mapping.profitMargin, "Category margin"),
+        margin:
+          mapping.profitMargin === ""
+            ? null
+            : wholeAmount(mapping.profitMargin, "Category margin"),
       },
     ]),
   );
@@ -88,7 +91,7 @@ export function createImportRules(settings: Settings, mappings: Mapping[]) {
       return { eligible: false, reason: "out_of_stock" };
     }
 
-    let margin = defaultMargin;
+    let categoryMargin: bigint | null = null;
     const collections = new Set<string>();
 
     for (const categoryId of product.categoryIds) {
@@ -100,8 +103,11 @@ export function createImportRules(settings: Settings, mappings: Mapping[]) {
         collections.add(mapping.collectionId);
       }
 
-      if (mapping.margin > margin) {
-        margin = mapping.margin;
+      if (
+        mapping.margin !== null &&
+        (categoryMargin === null || mapping.margin > categoryMargin)
+      ) {
+        categoryMargin = mapping.margin;
       }
     }
 
@@ -124,7 +130,7 @@ export function createImportRules(settings: Settings, mappings: Mapping[]) {
         reason: "above_maximum",
       };
     }
-
+    const margin = categoryMargin ?? defaultMargin;
     const sellingPrice = sourcePrice + margin;
 
     const originalPrice = minorUnits(product.originalPrice, "Original price");

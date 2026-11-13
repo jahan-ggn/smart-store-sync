@@ -244,9 +244,9 @@ function MappingForm({
             <s-stack direction="block" gap="base">
               <s-paragraph>
                 Choose a Shopify collection for each source category. Category
-                margins are fixed amounts, not percentages. During import, the
-                highest applicable margin, including the default profit margin,
-                will be used.
+                margins are fixed amounts, not percentages. A category margin
+                overrides the default profit margin. Leave it blank to use the
+                default, or enter 0 to add no margin.
               </s-paragraph>
 
               {rows.length === 0 ? (
@@ -314,7 +314,6 @@ function MappingForm({
                             max={9999999999}
                             step={1}
                             inputMode="numeric"
-                            required
                             value={row.profitMargin}
                             disabled={busy}
                             onInput={(event) =>

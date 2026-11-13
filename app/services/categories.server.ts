@@ -101,7 +101,7 @@ export async function loadCategoryMapping(shop: string, admin: Admin) {
           categoryId: category.id,
           categoryName: category.name,
           collectionId: mapping?.collectionId ?? "",
-          profitMargin: mapping?.profitMargin ?? "0",
+          profitMargin: mapping?.profitMargin ?? "",
         };
       }),
     })),
@@ -184,17 +184,18 @@ export async function saveCategoryMapping(
 
     if (
       typeof row.profitMargin !== "string" ||
-      !/^\d{1,10}$/.test(row.profitMargin)
+      (row.profitMargin !== "" && !/^\d{1,10}$/.test(row.profitMargin))
     ) {
       throw new CategoryMappingError(
-        "Every category margin must be a non-negative whole number, up to 10 digits.",
+        "Leave a category margin blank to use the default, or enter a non-negative whole number up to 10 digits.",
       );
     }
 
     return {
       sourceCategoryId: row.categoryId,
       collectionId: row.collectionId || null,
-      profitMargin: BigInt(row.profitMargin).toString(),
+      profitMargin:
+        row.profitMargin === "" ? "" : BigInt(row.profitMargin).toString(),
     };
   });
 
