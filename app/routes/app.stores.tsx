@@ -7,12 +7,12 @@ import type {
 import { data, useFetcher, useLoaderData } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 
-import { authenticate } from "../shopify.server";
+import { requireApprovedPlan } from "../services/require-plan.server";
 import { StoresError, loadStores, saveStores } from "../services/stores.server";
 import { ensureSourceAccount } from "../services/account.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { session } = await requireApprovedPlan(request);
 
   try {
     await ensureSourceAccount(session.shop);
@@ -34,7 +34,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { session } = await requireApprovedPlan(request);
   const form = await request.formData();
 
   try {
@@ -102,6 +102,11 @@ export default function Stores() {
               heading={fetcher.data.ok ? "Stores saved" : "Stores not saved"}
             >
               <s-paragraph>{fetcher.data.message}</s-paragraph>
+              {fetcher.data.ok && (
+                <s-link href="/app/mappings">
+                  Continue to category mapping
+                </s-link>
+              )}
             </s-banner>
           </div>
         )}

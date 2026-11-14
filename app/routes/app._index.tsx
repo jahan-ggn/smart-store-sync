@@ -20,6 +20,7 @@ import {
   syncShopifyBilling,
   type BillingState,
 } from "../services/billing.server";
+import { requireApprovedPlan } from "../services/require-plan.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session, admin } = await authenticate.admin(request);
@@ -61,7 +62,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { session } = await requireApprovedPlan(request);
   const form = await request.formData();
 
   try {
@@ -129,6 +130,18 @@ export default function AccountAndPlan() {
     setSettings((current) => ({ ...current, [name]: value }));
   }
 
+  if (billing?.status !== "trial" && billing?.status !== "active") {
+    return (
+      <PlanWelcome
+        shop={shop}
+        connectionError={connectionError}
+        billingError={billingError}
+        canChoosePlan={billing?.status === "inactive"}
+        planUrl={planUrl}
+      />
+    );
+  }
+
   return (
     <s-page heading="Account & Plan">
       <form
@@ -193,7 +206,7 @@ export default function AccountAndPlan() {
                         : "No approved subscription"}
                   </s-paragraph>
 
-                  {billing.status !== "inactive" && billing.expiresAt && (
+                  {billing.expiresAt && (
                     <s-paragraph>
                       Approved until:{" "}
                       {new Date(billing.expiresAt).toUTCString()}
@@ -215,9 +228,7 @@ export default function AccountAndPlan() {
 
               {planUrl ? (
                 <s-button href={planUrl} target="_top" variant="primary">
-                  {billing?.status === "inactive"
-                    ? "Choose Shopify plan"
-                    : "Manage Shopify plan"}
+                  Manage Shopify plan
                 </s-button>
               ) : (
                 <s-paragraph>
@@ -250,13 +261,20 @@ export default function AccountAndPlan() {
               </s-button>
             </s-banner>
           ) : (
-            <s-section heading="Source account">
-              <s-paragraph>
-                Your source account is connected automatically. Source access
-                requires an approved Shopify plan and authorized catalogs.
-              </s-paragraph>
+            <s-section heading="Set up catalog sync">
+              <s-stack direction="block" gap="base">
+                <s-paragraph>
+                  Your plan is approved. Choose your source stores, map their
+                  categories to Shopify collections, then set your pricing and
+                  import filters below.
+                </s-paragraph>
 
-              <s-link href="/app/stores">Choose source stores</s-link>
+                <s-button href="/app/stores" variant="primary">
+                  Choose source stores
+                </s-button>
+
+                <s-link href="/app/mappings">Map categories</s-link>
+              </s-stack>
             </s-section>
           )}
 
@@ -334,6 +352,80 @@ export default function AccountAndPlan() {
           </s-button>
         </s-stack>
       </form>
+    </s-page>
+  );
+}
+
+export function PlanWelcome({
+  shop,
+  connectionError,
+  billingError,
+  canChoosePlan,
+  planUrl,
+}: {
+  shop: string;
+  connectionError: string | null;
+  billingError: string | null;
+  canChoosePlan: boolean;
+  planUrl: string | null;
+}) {
+  const error = connectionError || billingError;
+  return (
+    <s-page heading="Welcome to Smart Store Sync">
+      <s-stack direction="block" gap="base">
+        <s-section heading="Connect your catalog to Shopify">
+          <s-paragraph>
+            Import products from your selected source stores, apply your pricing
+            rules, and keep your catalog in sync.
+          </s-paragraph>
+          <s-paragraph>Connected store: {shop}</s-paragraph>
+        </s-section>
+
+        {error ? (
+          <s-banner
+            tone="warning"
+            heading={
+              connectionError
+                ? "Unable to finish connecting your account"
+                : "Billing status unavailable"
+            }
+          >
+            <s-paragraph>{error}</s-paragraph>
+          </s-banner>
+        ) : canChoosePlan ? (
+          <s-section heading="Choose your plan to get started">
+            <s-stack direction="block" gap="base">
+              <s-heading>Standard — $25 USD per month</s-heading>
+              <s-paragraph>
+                Includes a 3-day trial for eligible stores. Shopify confirms
+                trial eligibility and subscription terms before you approve.
+              </s-paragraph>
+              <s-paragraph>
+                Approve your plan on Shopify to enable imports. After approval,
+                return here to choose source stores and map your categories.
+              </s-paragraph>
+              {planUrl ? (
+                <s-button href={planUrl} target="_top" variant="primary">
+                  Activate plan
+                </s-button>
+              ) : (
+                <s-banner tone="warning" heading="Plan selection unavailable">
+                  <s-paragraph>
+                    Unable to open Shopify plan selection. Please try again
+                    shortly.
+                  </s-paragraph>
+                </s-banner>
+              )}
+            </s-stack>
+          </s-section>
+        ) : (
+          <s-banner tone="warning" heading="Billing status unavailable">
+            <s-paragraph>
+              Check your billing status before continuing setup.
+            </s-paragraph>
+          </s-banner>
+        )}
+      </s-stack>
     </s-page>
   );
 }

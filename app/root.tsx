@@ -1,4 +1,11 @@
-import { Links, Meta, Outlet, Scripts, ScrollRestoration } from "react-router";
+import {
+  Links,
+  Meta,
+  Outlet,
+  Scripts,
+  ScrollRestoration,
+  useNavigation,
+} from "react-router";
 
 export const meta = () => [
   { title: "Smart Store Sync" },
@@ -10,6 +17,8 @@ export const meta = () => [
 ];
 
 export default function App() {
+  const navigation = useNavigation();
+  const loading = navigation.state !== "idle";
   return (
     <html lang="en">
       <head>
@@ -25,6 +34,26 @@ export default function App() {
         <Links />
       </head>
       <body>
+        {loading && (
+          <div
+            role="status"
+            aria-live="polite"
+            style={{
+              position: "fixed",
+              inset: 0,
+              zIndex: 9999,
+              display: "grid",
+              placeItems: "center",
+              background: "rgba(255, 255, 255, 0.9)",
+              fontFamily: "Inter, sans-serif",
+            }}
+          >
+            <div style={{ textAlign: "center" }}>
+              <progress aria-label="Loading" />
+              <p>Loading, please wait…</p>
+            </div>
+          </div>
+        )}
         <Outlet />
         <ScrollRestoration />
         <Scripts />

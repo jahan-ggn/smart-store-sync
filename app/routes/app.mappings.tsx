@@ -7,7 +7,7 @@ import type {
 import { data, useFetcher, useLoaderData } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 
-import { authenticate } from "../shopify.server";
+import { requireApprovedPlan } from "../services/require-plan.server";
 import {
   CategoryMappingError,
   loadCategoryMapping,
@@ -23,7 +23,7 @@ function errorMessage(error: unknown) {
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session, admin } = await authenticate.admin(request);
+  const { session, admin } = await requireApprovedPlan(request);
 
   try {
     await ensureSourceAccount(session.shop);
@@ -49,7 +49,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session, admin } = await authenticate.admin(request);
+  const { session, admin } = await requireApprovedPlan(request);
   const form = await request.formData();
 
   try {
@@ -198,6 +198,9 @@ function MappingForm({
                 }
               >
                 <s-paragraph>{fetcher.data.message}</s-paragraph>
+                {fetcher.data.ok && (
+                  <s-link href="/app">Review pricing and import filters</s-link>
+                )}
               </s-banner>
             )}
           </div>
