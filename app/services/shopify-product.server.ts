@@ -51,6 +51,10 @@ type CollectionPage = {
   nodes: { id: string }[];
   pageInfo: { hasNextPage: boolean; endCursor: string | null };
 };
+type CollectionSource = {
+  __typename: string;
+  inclusion?: { conditions: { __typename: string }[] };
+};
 type ExistingProduct = {
   id: string;
   title: string;
@@ -75,6 +79,21 @@ const CHECK_COLLECTIONS = `#graphql
     nodes(ids: $ids) {
       __typename
       ... on Collection { id title }
+    }
+  }
+`;
+const COLLECTION_SOURCES = `#graphql
+  query SourceCollectionMembershipTypes($ids: [ID!]!) {
+    nodes(ids: $ids) {
+      ... on Collection {
+        id
+        sources {
+          __typename
+          ... on CollectionConditionsSource {
+            inclusion { conditions { __typename } }
+          }
+        }
+      }
     }
   }
 `;
@@ -288,6 +307,7 @@ export function createProductImporter(admin: Admin, concurrency = 3) {
     throw new Error("Importer concurrency must be between 1 and 3.");
   const api = createRequester(admin);
   const checkedCollections = new Set<string>();
+  const automatedCollections = new Map<string, boolean>();
   async function missingCollections(
     id: string,
     page: CollectionPage,
@@ -385,6 +405,28 @@ export function createProductImporter(admin: Admin, concurrency = 3) {
       ids.forEach((id) => checkedCollections.add(id));
     }
   }
+  async function checkExtraCollections(extraIds: Set<string>) {
+    const unchecked = [...extraIds].filter(
+      (id) => !automatedCollections.has(id),
+    );
+    for (let offset = 0; offset < unchecked.length; offset += 50) {
+      const ids = unchecked.slice(offset, offset + 50);
+      const result = await api.request<{
+        nodes: ({ id: string; sources: CollectionSource[] } | null)[];
+      }>(COLLECTION_SOURCES, { ids }, ids.length * 6 + 1);
+      for (const node of result.nodes) {
+        if (!node) continue;
+        automatedCollections.set(
+          node.id,
+          node.sources.some(
+            (source) =>
+              source.__typename === "CollectionSubCollectionsSource" ||
+              Boolean(source.inclusion?.conditions.length),
+          ),
+        );
+      }
+    }
+  }
   async function lookupGroup(products: PreparedProduct[]) {
     const variables: Record<string, unknown> = {};
     const declarations = products
@@ -473,6 +515,16 @@ export function createProductImporter(admin: Admin, concurrency = 3) {
       throw new Error("The import group contains duplicate source products.");
     await checkCollections(products);
     const existing = await lookupGroup(products);
+    const desiredByProduct = products.map(
+      (product) => new Set(collectionIds(product)),
+    );
+    const extraCollections = new Set<string>();
+    existing.forEach(({ collectionIds }, i) => {
+      for (const id of collectionIds) {
+        if (!desiredByProduct[i].has(id)) extraCollections.add(id);
+      }
+    });
+    await checkExtraCollections(extraCollections);
     const results: { sourceId: string; productId: string; title: string }[] =
       new Array(products.length);
     let next = 0;
@@ -484,7 +536,11 @@ export function createProductImporter(admin: Admin, concurrency = 3) {
         try {
           beforeWrite();
           const { product, variants, decision } = products[i];
-          const desiredCollections = collectionIds(products[i]);
+          const desiredCollections = [...desiredByProduct[i]];
+          const currentCollections = existing[i].collectionIds.filter(
+            (id) =>
+              desiredByProduct[i].has(id) || !automatedCollections.get(id),
+          );
           if (!decision.eligible || !variants.variants.length)
             throw new Error("The prepared product is not eligible.");
           const ids = new Map(
@@ -511,8 +567,8 @@ export function createProductImporter(admin: Admin, concurrency = 3) {
           const unchanged =
             existing[i].id &&
             existing[i].title === product.name &&
-            existing[i].collectionIds.length === desiredCollections.length &&
-            existing[i].collectionIds.every(
+            currentCollections.length === desiredCollections.length &&
+            currentCollections.every(
               (id, index) => id === desiredCollections[index],
             ) &&
             existing[i].variants.length === expected.length &&
