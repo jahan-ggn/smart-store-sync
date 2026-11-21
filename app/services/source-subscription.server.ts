@@ -1,7 +1,7 @@
-import process from "node:process";
 import { getSavedPurchaseToken } from "./account.server";
 import { checkImportShop } from "./import-jobs.server";
 import db from "../db.server";
+import { sourceApiUrl } from "./source-api-url.server";
 
 export class SourceSubscriptionError extends Error {
   constructor(
@@ -43,15 +43,19 @@ export async function requireSourceSubscription(shop: string) {
       "Open the app in Shopify admin to connect the source account automatically.",
       403,
     );
-  const base = process.env.SOURCE_API_BASE_URL?.replace(/\/+$/, "");
-  if (!base)
+  let endpoint: URL;
+  try {
+    endpoint = sourceApiUrl("/subscriptions/status");
+  } catch {
     throw new SourceSubscriptionError(
-      "The source service is not configured.",
+      "Configure a valid HTTPS URL for the source service.",
       503,
     );
+  }
+
   let response: Response;
   try {
-    response = await fetch(`${base}/subscriptions/status`, {
+    response = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ token, buyer_domain: `https://${shop}` }),

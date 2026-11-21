@@ -8,6 +8,7 @@ import {
 } from "./account.server";
 import { stopShopImportsInTransaction } from "./privacy.server";
 import db from "../db.server";
+import { sourceApiUrl } from "./source-api-url.server";
 
 export class BillingUnavailable extends Error {
   constructor() {
@@ -276,33 +277,13 @@ async function writeSourceBilling(
   timeoutMs = 15_000,
 ): Promise<boolean> {
   try {
-    const base = process.env.SOURCE_API_BASE_URL?.replace(/\/+$/, "");
     const key = process.env.SHOPIFY_PROVISIONING_API_KEY ?? "";
 
-    if (!base || key.length < 32) {
+    if (key.length < 32) {
       throw new BillingUnavailable();
     }
 
-    const endpoint = new URL(`${base}/subscriptions/shopify/billing`);
-    const local = ["localhost", "127.0.0.1", "[::1]"].includes(
-      endpoint.hostname,
-    );
-
-    if (
-      endpoint.username ||
-      endpoint.password ||
-      endpoint.search ||
-      endpoint.hash ||
-      (endpoint.protocol !== "https:" &&
-        !(
-          endpoint.protocol === "http:" &&
-          local &&
-          process.env.NODE_ENV !== "production"
-        ))
-    ) {
-      throw new BillingUnavailable();
-    }
-
+    const endpoint = sourceApiUrl("/subscriptions/shopify/billing");
     const response = await fetch(endpoint, {
       method: "POST",
       headers: {

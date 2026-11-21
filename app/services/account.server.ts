@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import process from "node:process";
+import { sourceApiUrl } from "./source-api-url.server";
 
 import db from "../db.server";
 
@@ -170,36 +171,19 @@ export async function ensureSourceAccount(shop: string): Promise<void> {
   // Check encryption configuration before creating a backend record.
   encryptionKey();
 
-  const base = process.env.SOURCE_API_BASE_URL?.replace(/\/+$/, "");
   const key = process.env.SHOPIFY_PROVISIONING_API_KEY ?? "";
 
-  if (!base || key.length < 32) {
+  if (key.length < 32) {
     throw new SourceProvisioningError("Source provisioning is not configured.");
   }
 
   let endpoint: URL;
-
   try {
-    endpoint = new URL(`${base}/subscriptions/shopify/provision`);
+    endpoint = sourceApiUrl("/subscriptions/shopify/provision");
   } catch {
-    throw new SourceProvisioningError("Invalid source service URL.");
-  }
-
-  const local = ["localhost", "127.0.0.1", "[::1]"].includes(endpoint.hostname);
-
-  if (
-    endpoint.username ||
-    endpoint.password ||
-    endpoint.search ||
-    endpoint.hash ||
-    (endpoint.protocol !== "https:" &&
-      !(
-        endpoint.protocol === "http:" &&
-        local &&
-        process.env.NODE_ENV !== "production"
-      ))
-  ) {
-    throw new SourceProvisioningError("The source service requires HTTPS.");
+    throw new SourceProvisioningError(
+      "Configure a valid HTTPS URL for the source service.",
+    );
   }
 
   let result: unknown;

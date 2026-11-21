@@ -1,5 +1,4 @@
-import process from "node:process";
-
+import { sourceApiUrl } from "./source-api-url.server";
 import { getSavedPurchaseToken } from "./account.server";
 
 export class StoresError extends Error {}
@@ -25,16 +24,18 @@ async function sourceRequest(
   path: string,
   body?: Record<string, unknown>,
 ): Promise<unknown> {
-  const baseUrl = process.env.SOURCE_API_BASE_URL?.replace(/\/+$/, "");
-
-  if (!baseUrl) {
-    throw new StoresError("The source service is not configured.");
+  let endpoint: URL;
+  try {
+    endpoint = sourceApiUrl(path);
+  } catch {
+    throw new StoresError(
+      "Configure a valid HTTPS URL for the source service.",
+    );
   }
 
   let response: Response;
-
   try {
-    response = await fetch(`${baseUrl}${path}`, {
+    response = await fetch(endpoint, {
       method: body ? "POST" : "GET",
       headers: body ? { "Content-Type": "application/json" } : undefined,
       body: body ? JSON.stringify(body) : undefined,
