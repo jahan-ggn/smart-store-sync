@@ -5,6 +5,7 @@ import {
   maintainAutomaticImports,
   runNextAutomaticImport,
 } from "../app/services/automatic-import.server";
+import { sourceImageOrigin } from "../app/services/shopify-images.server";
 
 let stopping = false;
 process.once("SIGINT", () => {
@@ -17,6 +18,8 @@ async function run() {
   const once = process.argv.slice(2);
   if (once.length && (once.length !== 1 || once[0] !== "--once"))
     throw new Error("Usage: import-worker.ts [--once]");
+  // Fail at boot rather than after every import's image stage fails.
+  sourceImageOrigin();
   let maintainedAt = 0;
   while (!stopping) {
     if (Date.now() - maintainedAt > 60_000) {

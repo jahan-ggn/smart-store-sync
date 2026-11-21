@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { extname } from "node:path";
+import process from "node:process";
 import { createRequester } from "./shopify-product.server";
 import type { SourceProduct } from "./source-csv.server";
 
@@ -95,7 +96,17 @@ function sameIds(a: string[], b: string[]) {
   return a.length === b.length && a.every((id, index) => id === b[index]);
 }
 
+// The only origin source images may be fetched from. Also called by the
+// worker at startup so a missing setting fails fast, not per import.
+export function sourceImageOrigin() {
+  const hostname = process.env.SOURCE_IMAGE_HOSTNAME?.trim().toLowerCase();
+  if (!hostname || !/^(?:[a-z0-9-]+\.)+[a-z][a-z0-9-]*$/.test(hostname))
+    throw new Error("Set SOURCE_IMAGE_HOSTNAME to the R2 image hostname.");
+  return `https://${hostname}`;
+}
+
 export function createImageImporter(admin: Admin) {
+  const sourceOrigin = sourceImageOrigin();
   const api = createRequester(admin);
   const knownFiles = new Map<string, File>();
   const downloadRetries = new Map<string, number>();
@@ -165,23 +176,40 @@ export function createImageImporter(admin: Admin) {
     if (!products.length) return;
     if (products.length > 250)
       throw new Error("Prepare at most 250 image products per group.");
-    const entries = new Map<string, { url: string; title: string }>();
+    const entries = new Map<string, { url: URL; title: string }>();
     const names = products.map((product) => {
       const urls = [...new Set(product.imageUrls)];
       if (!urls.length || urls.length > 250)
         throw new Error("A product must have between 1 and 250 image URLs.");
       return urls.map((url) => {
         const name = sourceImageFilename(url);
-        entries.set(name, { url, title: product.name });
+        entries.set(name, { url: new URL(url), title: product.name });
         return name;
       });
     });
     const files = new Map<string, File>();
     // Resolve filenames together rather than one API call per image.
     const allNames = [...entries.keys()];
-    for (const name of allNames)
+    const allowedNames = allNames.filter((name) => {
+      const { url } = entries.get(name)!;
+      if (url.origin === sourceOrigin) return true;
+      files.set(name, {
+        __typename: "MediaImage",
+        id: "",
+        fileStatus: "FAILED",
+        fileErrors: [
+          {
+            code: "SOURCE_ORIGIN_NOT_ALLOWED",
+            message:
+              "Source image URL must use the configured HTTPS image host.",
+          },
+        ],
+      });
+      return false;
+    });
+    for (const name of allowedNames)
       if (knownFiles.has(name)) files.set(name, knownFiles.get(name)!);
-    const uncached = allNames.filter((name) => !files.has(name));
+    const uncached = allowedNames.filter((name) => !files.has(name));
     for (let offset = 0; offset < uncached.length; offset += 25) {
       const batch = uncached.slice(offset, offset + 25);
       const variables: Record<string, unknown> = {};
@@ -210,7 +238,7 @@ export function createImageImporter(admin: Admin) {
         if (page.nodes[0]) files.set(name, page.nodes[0]);
       });
     }
-    const missing = allNames.filter(
+    const missing = allowedNames.filter(
       (name) =>
         !files.has(name) ||
         (!knownFiles.has(name) &&
@@ -232,6 +260,7 @@ export function createImageImporter(admin: Admin) {
           let retryable = false;
           try {
             const response = await fetch(entries.get(name)!.url, {
+              redirect: "manual",
               signal: AbortSignal.timeout(30_000),
             });
             const type = response.headers.get("content-type") ?? "";
@@ -284,7 +313,7 @@ export function createImageImporter(admin: Admin) {
         {
           files: batch.map((name) => ({
             filename: name,
-            originalSource: entries.get(name)!.url,
+            originalSource: entries.get(name)!.url.href,
             contentType: "IMAGE",
             // A failed upload can reserve a name without appearing in search.
             // URL-hashed names let a retry replace that reservation safely.
@@ -434,7 +463,7 @@ export function createImageImporter(admin: Admin) {
         if (!ready(name))
           console.warn(
             `Image skipped for ${products[i].storeId}:${products[i].productId}: ` +
-              `${entries.get(name)!.url} (${file.fileStatus}; ` +
+              `${entries.get(name)!.url.href} (${file.fileStatus}; ` +
               `${file.fileErrors.map((error) => error.message).join("; ") || "not ready"}).`,
           );
       }
