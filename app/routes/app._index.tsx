@@ -41,7 +41,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   if (!connectionError) {
     try {
       billing = await syncShopifyBilling(session.shop, admin);
-    } catch {
+    } catch (error) {
+      if (error instanceof Response) throw error;
       billingError = "Unable to refresh your billing status. Please try again.";
     }
   }

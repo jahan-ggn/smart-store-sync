@@ -13,8 +13,8 @@ export async function requireApprovedPlan(request: Request) {
     if (billing.status === "trial" || billing.status === "active") {
       return context;
     }
-  } catch {
-    // Keep access blocked when verification is unavailable.
+  } catch (error) {
+    if (error instanceof Response) throw error;
   }
 
   throw context.redirect("/app");

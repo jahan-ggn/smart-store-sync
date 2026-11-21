@@ -74,8 +74,16 @@ function graphqlData(value: unknown): Record<string, unknown> {
   return value.data;
 }
 
-// Use session.shop and the authenticated Admin client, never browser identity.
-// Read-only: this does not provision accounts or update backend expiry.
+function isShopifyReauthentication(response: unknown) {
+  return (
+    response instanceof Response &&
+    ((response.status === 401 && response.body === null) ||
+      (response.status >= 300 &&
+        response.status < 400 &&
+        response.headers.has("Location")))
+  );
+}
+
 export async function readShopifyBilling(
   shop: string,
   admin: ReturnType<typeof createImportAdmin>,
@@ -97,6 +105,8 @@ export async function readShopifyBilling(
     const identityResponse = await admin.graphql(identityQuery, {
       signal: AbortSignal.timeout(15_000),
     });
+
+    if (isShopifyReauthentication(identityResponse)) throw identityResponse;
 
     if (!identityResponse.ok) {
       throw new BillingUnavailable();
@@ -263,8 +273,8 @@ export async function readShopifyBilling(
       expiresAt: new Date(expiry).toISOString(),
       cancelAtEndOfCycle: subscription.cancelAtEndOfCycle,
     };
-  } catch {
-    // Never expose raw API errors, headers, response bodies or credentials.
+  } catch (error) {
+    if (isShopifyReauthentication(error)) throw error;
     throw new BillingUnavailable();
   }
 }
